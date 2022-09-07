@@ -1,3 +1,4 @@
+#include <pybind11/stl.h>
 #include "tensorflow/compiler/xla/service/gpu/gpu_cost_model.h"
 
 #include "tensorflow/compiler/xla/primitive_util.h"
@@ -350,6 +351,116 @@ double EstimateHloModuleCost(const HloModule* hlo_module) {
 
   return sum;
 }
+
+
+py::dict convertHloCostToPydict(const HloCost & hlo_cost){
+  py::dict result;
+  result["op_name"] = py::cast(hlo_cost.op_name);
+  result["flops"] = py::cast(hlo_cost.flops);
+  py::dict network_describ;
+  network_describ["comm_type"] = py::cast(hlo_cost.network_describ.comm_type);
+  network_describ["replica_groups_str"] = py::cast(hlo_cost.network_describ.replica_groups_str);
+  network_describ["comm_data_count"] = py::cast(hlo_cost.network_describ.comm_data_count);
+  result["network_describ"] = network_describ;
+  result["data_type"] = py::cast(hlo_cost.data_type);
+  result["network_count"] = py::cast(hlo_cost.network_count);
+  return result;
+}
+
+
+py::list HloModuleCost(const HloModule* hlo_module) {
+  py::list hlo_cost_result;
+
+  const int64_t num_devices = hlo_module->config().num_partitions();
+  int num_micro_batches =
+      pass_context::GetInt("gpu_cost_model::num_micro_batches", 1);
+  std::string grad_sync_channel_ids =
+      pass_context::GetString("gpu_cost_model::grad_sync_channel_ids", "");
+
+  // Compute cost of all instruction.
+  double flops_sum = 0.0, mem_sum = 0.0, network_sum = 0.0;
+  const HloComputation* entry_computation = hlo_module->entry_computation();
+  for (const HloInstruction* ins : entry_computation->instructions()) {
+    double cost = 0.0;
+    HloCost tmp_hlo_cost;
+
+    if (ins->opcode() == HloOpcode::kAllGather ||
+        ins->opcode() == HloOpcode::kAllReduce ||
+        ins->opcode() == HloOpcode::kAllToAll ||
+        ins->opcode() == HloOpcode::kReduceScatter) {
+      auto coll = DynCast<HloCollectiveInstruction>(ins);
+      CHECK(coll != nullptr);
+
+      std::vector<ReplicaGroup> replica_groups = coll->replica_groups();
+      // Expand the special replica_groups {{0}}
+      replica_groups = ExpandSpecialReplicaGroups(replica_groups, num_devices);
+      std::string replica_groups_str = Group2Str(replica_groups);
+
+      for (const auto operand : ins->operands()) {
+        int64_t size = spmd::GetBytes(operand->shape());
+        switch (ins->opcode()) {
+          case HloOpcode::kAllGather:{
+            tmp_hlo_cost.set_value(ins->name(), 0.0, "AllGather", replica_groups_str, size, operand->shape().element_type(), 0);
+            break;
+          }
+          case HloOpcode::kAllReduce: {
+            double normalizer = 1.0;
+
+            // Amortize the cost of grad sync with the number of micro batches.
+            std::string key = absl::StrFormat(".%d.", *ins->channel_id());
+            if (grad_sync_channel_ids.find(key) != std::string::npos) {
+              normalizer = num_micro_batches;
+            }
+            tmp_hlo_cost.set_value(ins->name(), 0.0, "AllReduce:normalizer:" + std::to_string(normalizer), replica_groups_str,
+                                   size, operand->shape().element_type(), 0);
+            break;
+          }
+          case HloOpcode::kAllToAll:
+            tmp_hlo_cost.set_value(ins->name(), 0.0, "AllToAll", replica_groups_str, size, operand->shape().element_type(), 0);
+            break;
+          case HloOpcode::kReduceScatter:
+            tmp_hlo_cost.set_value(ins->name(), 0.0, "ReduceScatter", replica_groups_str, size, operand->shape().element_type(), 0);
+            break;
+          default:
+            break;
+        }
+        py::dict py_hlo_cost = convertHloCostToPydict(tmp_hlo_cost);
+        hlo_cost_result.append(py_hlo_cost);
+      }
+    }
+
+    if (ins->IsCustomCall(kGemmCallTarget)) {
+      const HloInstruction* lhs = ins->operand(0);
+      const HloInstruction* rhs = ins->operand(1);
+      std::vector<int64_t> lhs_space_dims, rhs_space_dims;
+      auto config = ins->backend_config<GemmBackendConfig>().ValueOrDie();
+      auto dnum = config.dot_dimension_numbers();
+      std::tie(lhs_space_dims, rhs_space_dims) =
+          spmd::GetSpaceDims(lhs->shape(), rhs->shape(), dnum);
+
+      int64_t flop_count =
+          lhs->shape().dimensions(lhs_space_dims[0]) *
+          lhs->shape().dimensions(dnum.lhs_contracting_dimensions(0)) *
+          rhs->shape().dimensions(rhs_space_dims[0]);
+      for (int dim : dnum.lhs_batch_dimensions()) {
+        flop_count *= lhs->shape().dimensions(dim);
+      }
+      flop_count *= 2;
+      tmp_hlo_cost.set_flops(ins->name(), flop_count, ins->shape().element_type());
+      flops_sum += flop_count;
+      py::dict py_hlo_cost = convertHloCostToPydict(tmp_hlo_cost);
+      hlo_cost_result.append(py_hlo_cost);
+    }
+  }
+  HloCost tmp_hlo_cost;
+  // tmp_hlo_cost.set_flops_network(ins->name(), flops_sum, ins->shape().element_type());
+  tmp_hlo_cost.set_flops_network("total", flops_sum, 1, 0.0);
+  py::dict py_hlo_cost = convertHloCostToPydict(tmp_hlo_cost);
+  hlo_cost_result.append(py_hlo_cost);
+
+  return hlo_cost_result;
+}
+
 
 }  // namespace gpu
 }  // namespace xla
