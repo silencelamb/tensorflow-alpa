@@ -656,6 +656,8 @@ cc_library(
         "//tensorflow/compiler/xla/service/gpu:gpu_cost_model",
         "//tensorflow/compiler/xla/service/spmd:alpa_compiler",
         "//tensorflow/compiler/xla/service/spmd:grad_acc_rewrite",
+        # Added by daixu
+        "//tensorflow/compiler/xla/service/gpu:analytical_perf_model",
     ],
 )
 

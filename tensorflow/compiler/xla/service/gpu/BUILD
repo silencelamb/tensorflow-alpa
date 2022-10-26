@@ -3084,3 +3084,20 @@ cc_library(
         "//tensorflow/compiler/xla/service/spmd:auto_sharding",
     ],
 )
+
+cc_library(
+    name = "analytical_perf_model",
+    srcs = [
+        "analytical_perf_model.cc",
+    ],
+    hdrs = [
+        "analytical_perf_model.h",
+    ],
+    deps = [
+        ":backend_configs_cc",
+        ":ir_emission_utils",
+        "//tensorflow/compiler/xla/service:hlo",
+        "//tensorflow/compiler/xla/service:pass_context",
+        "//tensorflow/compiler/xla/service/spmd:auto_sharding",
+    ],
+)

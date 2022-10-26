@@ -58,8 +58,13 @@ limitations under the License.
 // Added by Alpa
 #include "tensorflow/compiler/xla/service/pass_context.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_cost_model.h"
+// Added by daixu, Wafer Scale Chip Mapping, Analitical Perf Model
+#include "tensorflow/compiler/xla/service/gpu/analytical_perf_model.h"
+
 #include "tensorflow/compiler/xla/service/spmd/alpa_compiler.h"
 #include "tensorflow/compiler/xla/service/spmd/grad_acc_rewrite.h"
+
+
 
 namespace xla {
 namespace {
@@ -817,6 +822,7 @@ void BuildXlaCompilerSubmodule(py::module& m) {
   m.def("clear_pass_context", &pass_context::ClearPassContext);
   m.def("estimate_hlo_module_cost", &gpu::EstimateHloModuleCost);
   m.def("hlo_module_cost_analysis", &gpu::HloModuleCost);
+  m.def("analytical_perf_of_hlo_module", &analytical_perf::AnalyticalPerfOfHloModule);
   m.def("set_hlo_module_output_shardings", &spmd::SetHloModuleOutputShardings);
   m.def("set_hlo_module_input_shardings", &spmd::SetHloModuleInputShardings);
   m.def("get_grad_sync_channel_ids", &spmd::GetGradSyncChannelIds);
