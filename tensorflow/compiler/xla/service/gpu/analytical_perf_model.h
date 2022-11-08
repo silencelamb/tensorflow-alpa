@@ -63,7 +63,10 @@ namespace analytical_perf {
             double compute_utilization; // 0~1
             double bandwidth_utilization; // 0~1
 
-            virtual double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype, int64_t unit_num) {
+            virtual double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype, int64_t unit_num, bool force_use_fp16) {
+                if (force_use_fp16) {
+                    datatype = F16;
+                }
                 return ops_num / (compute[datatype] * unit_num * compute_utilization);
             }
             virtual double AnalyseCommunicateTime(int64_t comm_bytes, COMM_MODE comm_mode, int64_t unit_num) {
@@ -104,7 +107,10 @@ namespace analytical_perf {
                     node_bw_ul = bw_ul;
                 }
                 
-                double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype, int64_t node_num) {
+                double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype, int64_t node_num, bool force_use_fp16) {
+                    if (force_use_fp16) {
+                        datatype = F16;
+                    }
                     double total_compute = node_num * cards.size() * cards[0].compute[datatype] * 
                         cards[0].compute_utilization;  // 先认为每个卡的利用率是一样的
                     return ops_num / total_compute;
@@ -165,7 +171,10 @@ namespace analytical_perf {
                     die_band_width = die_bw;
                     die_bw_ul = bw_ul;
                 }
-                double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype ,int64_t die_num) {
+                double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype ,int64_t die_num, bool force_use_fp16) {
+                    if (force_use_fp16) {
+                        datatype = F16;
+                    }
                     double total_compute = die_num * tiles.size() * tiles[0].size() * tiles[0][0].compute[datatype] * 
                         tiles[0][0].compute_utilization;  // 先认为每个卡的利用率是一样的
                     return ops_num / total_compute;                    

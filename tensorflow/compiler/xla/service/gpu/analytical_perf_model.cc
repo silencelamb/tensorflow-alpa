@@ -75,6 +75,7 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
       pass_context::GetInt("analytical_perf::num_micro_batches", 1);
   std::string grad_sync_channel_ids =
       pass_context::GetString("analytical_perf::grad_sync_channel_ids", "");
+  bool force_use_fp16 = pass_context::GetBool("analytical_perf::force_use_fp16", false);
 
   // hardware == "gpu"
   int64_t card_num = pass_context::GetInt("analytical_perf_gpu::card_num", 8);
@@ -192,10 +193,10 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
       flop_count *= 2;
 
       if (hardware == "gpu") {
-        cost += gpu_node.cards[0].AnalyseComputeTime(flop_count, ins->shape().element_type(), 1);
+        cost += gpu_node.cards[0].AnalyseComputeTime(flop_count, ins->shape().element_type(), 1, force_use_fp16);
       }
       else {
-        cost += wsc_die.AnalyseComputeTime(flop_count, ins->shape().element_type(), 1);
+        cost += wsc_die.AnalyseComputeTime(flop_count, ins->shape().element_type(), 1, force_use_fp16);
       }
     }
     if (verbose == 2) {
