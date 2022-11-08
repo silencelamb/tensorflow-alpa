@@ -100,22 +100,28 @@ namespace analytical_perf {
                     for(int64_t i = 0; i < card_num; i++){
                         cards.push_back(Card(card_cmp, card_bw, card_mem, cmp_ul, bw_ul));
                     }
+                    node_band_width = node_bw;
                     node_bw_ul = bw_ul;
                 }
                 
-                double AnalyseComputeTime(double ops_num, PrimitiveType datatype, int64_t node_num) {
+                double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype, int64_t node_num) {
                     double total_compute = node_num * cards.size() * cards[0].compute[datatype] * 
                         cards[0].compute_utilization;  // 先认为每个卡的利用率是一样的
                     return ops_num / total_compute;
                 }
                 
-                double AnalyseCommunicateTime(double comm_bytes, COMM_MODE comm_mode, int64_t node_num) {
+                double AnalyseCommunicateTime(int64_t comm_bytes, COMM_MODE comm_mode, int64_t node_num, int verbose) {
                     // 跨了节点时通信性能估计的策略
                     // 初步策略，节点间通信的时间 与 节点内通信的时间, 两者的最大值
                     int64_t card_num = cards.size();
                     double intra_node_time = cards[0].AnalyseCommunicateTime(comm_bytes, comm_mode, card_num);
                     int64_t total_size_inter_node = get_comm_total_size(comm_bytes, comm_mode, node_num);
                     double inter_node_time = total_size_inter_node / (node_band_width * node_num * node_bw_ul);
+                    if (verbose == 2) {
+                        std::cout << std::endl <<  "intra_node_time: " << intra_node_time 
+                                << ", total_size_inter_node: " << total_size_inter_node
+                                << ", inter_node_time: " << inter_node_time << std::endl;
+                    }
                     return std::max(intra_node_time, inter_node_time);
                 }
         };
@@ -159,13 +165,13 @@ namespace analytical_perf {
                     die_band_width = die_bw;
                     die_bw_ul = bw_ul;
                 }
-                double AnalyseComputeTime(double ops_num, PrimitiveType datatype ,int64_t die_num) {
+                double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype ,int64_t die_num) {
                     double total_compute = die_num * tiles.size() * tiles[0].size() * tiles[0][0].compute[datatype] * 
                         tiles[0][0].compute_utilization;  // 先认为每个卡的利用率是一样的
                     return ops_num / total_compute;                    
                 }
 
-                double AnalyseCommunicateTime(double comm_bytes, COMM_MODE comm_mode, int64_t die_num) {
+                double AnalyseCommunicateTime(int64_t comm_bytes, COMM_MODE comm_mode, int64_t die_num) {
                     // 跨Die通信性能估计的策略
                     // 初步策略，Die间通信的时间 与 Die内通信的时间, 两者的最大值
     

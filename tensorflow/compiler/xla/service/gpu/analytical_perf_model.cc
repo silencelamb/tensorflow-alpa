@@ -36,6 +36,24 @@ const std::vector<ReplicaGroup> ExpandSpecialReplicaGroups(
   }
 }
 
+// Make a string key of a replica_groups.
+std::string Group2Str(const std::vector<ReplicaGroup>& replica_groups) {
+  std::ostringstream os;
+
+  os << "(";
+  for (const auto& group : replica_groups) {
+    os << "(";
+    for (const auto& id : group.replica_ids()) {
+      os << id << ",";
+    }
+    os << "),";
+  }
+  os << ")";
+
+  return os.str();
+}
+
+
 
 double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
   const int64_t num_devices = hlo_module->config().num_partitions();
@@ -92,8 +110,14 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
       std::vector<ReplicaGroup> replica_groups = coll->replica_groups();
       // Expand the special replica_groups {{0}}
       replica_groups = ExpandSpecialReplicaGroups(replica_groups, num_devices);
-      if (replica_groups.size() > 1 || replica_groups[0].replica_ids_size()) {
-        std::cout << "+++++++++++++++++unhandled cases!!!++++++++++++++++++" << std::endl;
+      std::string group_str = Group2Str(replica_groups);
+      if (replica_groups.size() > 1) {
+        std::cout << "GroupString(unhandled cases): " << group_str << ": ";
+      }
+      if (verbose) {
+        if (replica_groups.size() <= 1) {
+          std::cout << "GroupString: " <<  group_str << ": ";
+        }
       }
       for (const auto operand : ins->operands()) {
         int64_t size = spmd::GetBytes(operand->shape());
@@ -122,14 +146,22 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
           default:
             break;
         }
+        if (verbose == 2) {
+          std::cout << "comm:" << ins->opcode() <<  "-" << size << ":device-"
+                               << num_devices << ":";
+        }
         if (hardware == "gpu") {
-          int64_t node_num = int(num_devices / gpu_node.cards.size());
-          if (node_num >= 1) {
-            tmp_op_time = gpu_node.AnalyseCommunicateTime(size, comm_mode, node_num);
+          int64_t node_num = int(floor((num_devices / gpu_node.cards.size())));
+          if (verbose == 2) {
+             std::cout << "node_num-" << node_num << ":";
+          }
+          if (node_num > 1) {
+            tmp_op_time = gpu_node.AnalyseCommunicateTime(size, comm_mode, node_num, verbose);
             tmp_op_time /= normalizer;
           }
           else {
             tmp_op_time = gpu_node.cards[0].AnalyseCommunicateTime(size, comm_mode, num_devices);
+            std::cout << "tmp_op_time-" << tmp_op_time << ":normalizer-" << normalizer << ":";
             tmp_op_time /= normalizer;
           }
         }
@@ -137,6 +169,7 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
           tmp_op_time = wsc_die.AnalyseCommunicateTime(size, comm_mode, num_devices);
           tmp_op_time /= normalizer;     
         }
+        cost += tmp_op_time;
       }
     }
 
@@ -165,9 +198,12 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
         cost += wsc_die.AnalyseComputeTime(flop_count, ins->shape().element_type(), 1);
       }
     }
-
+    if (verbose == 2) {
+      std::cout << ins->opcode() <<  " " <<std::fixed << std::setprecision(8) 
+                                 << cost << std::endl;
+    }
     if (cost > 0) {
-      spmd::StdCerr(verbose) << ins->ToString() << " cost: " << std::fixed
+      spmd::StdCerr(verbose) << ins->ToString() << " cost(in SPMD): " << std::fixed
                              << std::setprecision(8) << cost << std::endl;
     }
 
