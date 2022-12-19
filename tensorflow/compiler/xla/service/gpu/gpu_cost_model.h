@@ -31,24 +31,30 @@ struct HloCost{
     NetworkDescrib network_describ;
     int data_type;
     double network_count;
+    double estimated_time;
     void set_value(std::string op_name_p, double flops_p, std::string comm_type_p, 
-                   std::string replica_groups_str_p, int comm_data_count_p, int data_type_p, double network_count_p){
+                   std::string replica_groups_str_p, int comm_data_count_p, int data_type_p, 
+                   double network_count_p, double estimated_time_p=0.0){
         op_name = op_name_p;
         flops = flops_p;
         network_describ.set_value(comm_type_p, replica_groups_str_p, comm_data_count_p, data_type_p);
         network_count = network_count_p;
         data_type = data_type_p;
+        estimated_time = estimated_time_p;
     }
-    void set_flops(std::string op_name_p, double flops_p, int data_type_p){
+    void set_flops(std::string op_name_p, double flops_p, int data_type_p) {
         op_name = op_name_p;
         flops = flops_p;
         data_type = data_type_p;
+        network_count = 0.0;
     }
-    void set_flops_network(std::string op_name_p, double flops_p, int data_type_p, double network_count_p){
+    void set_flops_network(std::string op_name_p, double flops_p, int data_type_p, double network_count_p, 
+                           double estimated_time_p=0.0) {
         op_name = op_name_p;
         flops = flops_p;
         data_type = data_type_p;  
         network_count = network_count_p;
+        estimated_time = estimated_time_p;
     }
 };
 

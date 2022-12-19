@@ -1,5 +1,6 @@
 #include <pybind11/stl.h>
 #include "tensorflow/compiler/xla/service/gpu/gpu_cost_model.h"
+#include "tensorflow/compiler/xla/service/gpu/analytical_perf_model.h"
 
 #include "tensorflow/compiler/xla/primitive_util.h"
 #include "tensorflow/compiler/xla/service/gpu/backend_configs.pb.h"
@@ -372,10 +373,42 @@ py::list HloModuleCost(const HloModule* hlo_module) {
   py::list hlo_cost_result;
 
   const int64_t num_devices = hlo_module->config().num_partitions();
+  int verbose = pass_context::GetInt("analytical_perf::verbose", 0);
+  std::string hardware = pass_context::GetString("analytical_perf::hardware", "gpu");
+
+  // parse python dict to cpp dict
+  py::dict compute_py_dict = pass_context::GetPyObject("analytical_perf::compute_dict");
+  std::map<PrimitiveType, int64_t> compute_dict;
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  for (auto item : compute_py_dict) {
+    PrimitiveType p_type = PrimitiveType(py::cast<int64_t>(item.first));
+    int64_t compute = py::cast<int64_t>(item.second);
+    compute_dict[p_type] = compute;
+  }
+  PyGILState_Release(gstate);
+
   int num_micro_batches =
-      pass_context::GetInt("gpu_cost_model::num_micro_batches", 1);
+      pass_context::GetInt("analytical_perf::num_micro_batches", 1);
   std::string grad_sync_channel_ids =
-      pass_context::GetString("gpu_cost_model::grad_sync_channel_ids", "");
+      pass_context::GetString("analytical_perf::grad_sync_channel_ids", "");
+  bool force_use_fp16 = pass_context::GetBool("analytical_perf::force_use_fp16", false);
+
+  // hardware == "gpu"
+  int64_t card_num = pass_context::GetInt("analytical_perf_gpu::card_num", 8);
+  int64_t card_bw= pass_context::GetInt("analytical_perf_gpu::card_bw", pow(10, 9));
+  int64_t card_mem = pass_context::GetInt("analytical_perf_gpu::card_mem", pow(10, 9));
+  int64_t node_bw = pass_context::GetInt("analytical_perf_gpu::node_bw", pow(10, 9));
+  // hardware == "wsc"
+  int64_t tile_r_num = pass_context::GetInt("analytical_perf_wsc::tile_r_num", 6);
+  int64_t tile_c_num = pass_context::GetInt("analytical_perf_wsc::tile_c_num", 6);
+  int64_t tile_bw= pass_context::GetInt("analytical_perf_wsc::tile_bw", pow(10, 9));
+  int64_t tile_mem = pass_context::GetInt("analytical_perf_wsc::tile_mem", pow(10, 9));
+  int64_t die_bw = pass_context::GetInt("analytical_perf_wsc::die_bw", pow(10, 9));
+  // common
+  double cmp_ul = pass_context::GetDouble("analytical_perf::cmp_ul");
+  double bw_ul = pass_context::GetDouble("analytical_perf::bw_ul");
+  wsc::Die wsc_die(tile_r_num, tile_c_num, compute_dict, tile_bw, tile_mem, die_bw, cmp_ul, bw_ul);
+
 
   // Compute cost of all instruction.
   double flops_sum = 0.0, mem_sum = 0.0, network_sum = 0.0;
@@ -383,6 +416,7 @@ py::list HloModuleCost(const HloModule* hlo_module) {
   for (const HloInstruction* ins : entry_computation->instructions()) {
     double cost = 0.0;
     HloCost tmp_hlo_cost;
+    double tmp_op_time = 0.0;
 
     if (ins->opcode() == HloOpcode::kAllGather ||
         ins->opcode() == HloOpcode::kAllReduce ||
@@ -398,32 +432,58 @@ py::list HloModuleCost(const HloModule* hlo_module) {
 
       for (const auto operand : ins->operands()) {
         int64_t size = spmd::GetBytes(operand->shape());
+        double normalizer = 1.0;
+        COMM_MODE comm_mode = ALL_REDUCE;
+        std::string comm_str;
+
         switch (ins->opcode()) {
           case HloOpcode::kAllGather:{
-            tmp_hlo_cost.set_value(ins->name(), 0.0, "AllGather", replica_groups_str, size, operand->shape().element_type(), 0);
+            comm_str = "AllGather";
+            comm_mode = ALL_GATHER;
             break;
           }
           case HloOpcode::kAllReduce: {
-            double normalizer = 1.0;
-
             // Amortize the cost of grad sync with the number of micro batches.
             std::string key = absl::StrFormat(".%d.", *ins->channel_id());
             if (grad_sync_channel_ids.find(key) != std::string::npos) {
               normalizer = num_micro_batches;
             }
-            tmp_hlo_cost.set_value(ins->name(), 0.0, "AllReduce:normalizer:" + std::to_string(normalizer), replica_groups_str,
-                                   size, operand->shape().element_type(), 0);
+            comm_str = "AllReduce";
+            comm_mode = ALL_REDUCE;
             break;
           }
           case HloOpcode::kAllToAll:
-            tmp_hlo_cost.set_value(ins->name(), 0.0, "AllToAll", replica_groups_str, size, operand->shape().element_type(), 0);
+            comm_str = "AllToAll";
+            comm_mode = ALL_TO_ALL;
             break;
           case HloOpcode::kReduceScatter:
-            tmp_hlo_cost.set_value(ins->name(), 0.0, "ReduceScatter", replica_groups_str, size, operand->shape().element_type(), 0);
+            comm_str = "ReduceScatter";
+            comm_mode = REDUCE_SCATTER;
             break;
           default:
             break;
         }
+        // emtimate time
+        if (hardware == "gpu") {
+          int64_t node_num = int(floor((num_devices / gpu_node.cards.size())));
+          if (verbose == 2) {
+             std::cout << "node_num-" << node_num << ":";
+          }
+          if (node_num > 1) {
+            tmp_op_time = gpu_node.AnalyseCommunicateTime(size, comm_mode, node_num, verbose);
+            tmp_op_time /= normalizer;
+          }
+          else {
+            tmp_op_time = gpu_node.cards[0].AnalyseCommunicateTime(size, comm_mode, num_devices);
+            std::cout << "tmp_op_time-" << tmp_op_time << ":normalizer-" << normalizer << ":";
+            tmp_op_time /= normalizer;
+          }
+        }
+        else if (hardware == "wsc") {
+          tmp_op_time = wsc_die.AnalyseCommunicateTime(size, comm_mode, num_devices);
+          tmp_op_time /= normalizer;     
+        }
+        tmp_hlo_cost.set_value(ins->name(), 0.0, comm_str, replica_groups_str, size, operand->shape().element_type(), 0.0, tmp_op_time); 
         py::dict py_hlo_cost = convertHloCostToPydict(tmp_hlo_cost);
         hlo_cost_result.append(py_hlo_cost);
       }
@@ -446,7 +506,13 @@ py::list HloModuleCost(const HloModule* hlo_module) {
         flop_count *= lhs->shape().dimensions(dim);
       }
       flop_count *= 2;
-      tmp_hlo_cost.set_flops(ins->name(), flop_count, ins->shape().element_type());
+      if (hardware == "gpu") {
+        tmp_op_time = gpu_node.cards[0].AnalyseComputeTime(flop_count, ins->shape().element_type(), 1, force_use_fp16);
+      }
+      else {
+        tmp_op_time = wsc_die.AnalyseComputeTime(flop_count, ins->shape().element_type(), 1, force_use_fp16);
+      }
+      tmp_hlo_cost.set_flops_network(ins->name(), flop_count, ins->shape().element_type(), 0.0, tmp_op_time);
       flops_sum += flop_count;
       py::dict py_hlo_cost = convertHloCostToPydict(tmp_hlo_cost);
       hlo_cost_result.append(py_hlo_cost);
