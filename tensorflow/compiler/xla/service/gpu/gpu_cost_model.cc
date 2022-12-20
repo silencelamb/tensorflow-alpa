@@ -365,6 +365,7 @@ py::dict convertHloCostToPydict(const HloCost & hlo_cost){
   result["network_describ"] = network_describ;
   result["data_type"] = py::cast(hlo_cost.data_type);
   result["network_count"] = py::cast(hlo_cost.network_count);
+  result["estimated_time"] = py::cast(hlo_cost.estimated_time);
   return result;
 }
 
@@ -388,9 +389,9 @@ py::list HloModuleCost(const HloModule* hlo_module) {
   PyGILState_Release(gstate);
 
   int num_micro_batches =
-      pass_context::GetInt("analytical_perf::num_micro_batches", 1);
+      pass_context::GetInt("gpu_cost_model::num_micro_batches", 1);
   std::string grad_sync_channel_ids =
-      pass_context::GetString("analytical_perf::grad_sync_channel_ids", "");
+      pass_context::GetString("gpu_cost_model::grad_sync_channel_ids", "");
   bool force_use_fp16 = pass_context::GetBool("analytical_perf::force_use_fp16", false);
 
   // hardware == "gpu"
@@ -407,7 +408,8 @@ py::list HloModuleCost(const HloModule* hlo_module) {
   // common
   double cmp_ul = pass_context::GetDouble("analytical_perf::cmp_ul");
   double bw_ul = pass_context::GetDouble("analytical_perf::bw_ul");
-  wsc::Die wsc_die(tile_r_num, tile_c_num, compute_dict, tile_bw, tile_mem, die_bw, cmp_ul, bw_ul);
+  xla::analytical_perf::gpu::Node gpu_node(card_num, compute_dict, card_bw, card_mem, node_bw, cmp_ul, bw_ul);
+  xla::analytical_perf::wsc::Die wsc_die(tile_r_num, tile_c_num, compute_dict, tile_bw, tile_mem, die_bw, cmp_ul, bw_ul);
 
 
   // Compute cost of all instruction.
@@ -433,13 +435,13 @@ py::list HloModuleCost(const HloModule* hlo_module) {
       for (const auto operand : ins->operands()) {
         int64_t size = spmd::GetBytes(operand->shape());
         double normalizer = 1.0;
-        COMM_MODE comm_mode = ALL_REDUCE;
+        xla::analytical_perf::COMM_MODE comm_mode = xla::analytical_perf::COMM_MODE::ALL_REDUCE;
         std::string comm_str;
 
         switch (ins->opcode()) {
           case HloOpcode::kAllGather:{
             comm_str = "AllGather";
-            comm_mode = ALL_GATHER;
+            comm_mode = xla::analytical_perf::COMM_MODE::ALL_GATHER;
             break;
           }
           case HloOpcode::kAllReduce: {
@@ -449,16 +451,16 @@ py::list HloModuleCost(const HloModule* hlo_module) {
               normalizer = num_micro_batches;
             }
             comm_str = "AllReduce";
-            comm_mode = ALL_REDUCE;
+            comm_mode = xla::analytical_perf::COMM_MODE::ALL_REDUCE;
             break;
           }
           case HloOpcode::kAllToAll:
             comm_str = "AllToAll";
-            comm_mode = ALL_TO_ALL;
+            comm_mode = xla::analytical_perf::COMM_MODE::ALL_TO_ALL;
             break;
           case HloOpcode::kReduceScatter:
             comm_str = "ReduceScatter";
-            comm_mode = REDUCE_SCATTER;
+            comm_mode = xla::analytical_perf::COMM_MODE::REDUCE_SCATTER;
             break;
           default:
             break;

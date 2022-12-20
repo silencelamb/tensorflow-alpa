@@ -3082,11 +3082,12 @@ cc_library(
         "//tensorflow/compiler/xla/service:hlo",
         "//tensorflow/compiler/xla/service:pass_context",
         "//tensorflow/compiler/xla/service/spmd:auto_sharding",
+        "//tensorflow/compiler/xla/service/gpu:analytical_perf_model",
     ],
 )
 
 cc_library(
-    name = "analytical_perf_model",
+    name = "analytical_perf_model",                                                                                                                                                 
     srcs = [
         "analytical_perf_model.cc",
     ],
