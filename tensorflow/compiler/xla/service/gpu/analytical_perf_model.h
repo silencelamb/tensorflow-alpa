@@ -33,7 +33,7 @@ namespace analytical_perf {
                 break;
 
             case ALL_REDUCE:
-                total_size = comm_bytes * (num-1);
+                total_size = comm_bytes * (num-1) * 2;
                 break;
 
             case ALL_TO_ALL:

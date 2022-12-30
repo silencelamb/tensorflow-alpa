@@ -370,6 +370,40 @@ py::dict convertHloCostToPydict(const HloCost & hlo_cost){
 }
 
 
+// double get_comm_total_size(int64_t comm_bytes, xla::analytical_perf::COMM_MODE comm_mode,  const int64_t num) {
+//     // 根据要通信的数据，得出num个设备之间的通信总量
+//     int64_t total_size = 0;
+//     switch (comm_mode) {
+//         case xla::analytical_perf::COMM_MODE::ALL_GATHER:
+//             total_size = comm_bytes * (num-1);
+//             break;
+        
+//         case xla::analytical_perf::COMM_MODE::ALL_SCATTER:
+//             total_size = comm_bytes * (num-1);
+//             break;
+
+//         case xla::analytical_perf::COMM_MODE::REDUCE_SCATTER:
+//             total_size = comm_bytes * (num-1);
+//             break;
+
+//         case xla::analytical_perf::COMM_MODE::ALL_REDUCE:
+//             total_size = comm_bytes * (num-1) * 2;
+//             break;
+
+//         case xla::analytical_perf::COMM_MODE::ALL_TO_ALL:
+//             total_size = comm_bytes * (num-1);
+//             break;
+
+//         case xla::analytical_perf::COMM_MODE::SEND_RECV:
+//             total_size = comm_bytes * (num-1);
+//             break;
+
+//         default:
+//             break;
+//     }
+//     return total_size;
+// }
+
 py::list HloModuleCost(const HloModule* hlo_module) {
   py::list hlo_cost_result;
 
@@ -485,7 +519,8 @@ py::list HloModuleCost(const HloModule* hlo_module) {
           tmp_op_time = wsc_die.AnalyseCommunicateTime(size, comm_mode, num_devices);
           tmp_op_time /= normalizer;     
         }
-        tmp_hlo_cost.set_value(ins->name(), 0.0, comm_str, replica_groups_str, size, operand->shape().element_type(), 0.0, tmp_op_time); 
+        double network_count = xla::analytical_perf::get_comm_total_size(size, comm_mode, num_devices);
+        tmp_hlo_cost.set_value(ins->name(), 0.0, comm_str, replica_groups_str, size, operand->shape().element_type(), network_count, tmp_op_time); 
         py::dict py_hlo_cost = convertHloCostToPydict(tmp_hlo_cost);
         hlo_cost_result.append(py_hlo_cost);
       }
