@@ -10,6 +10,9 @@
 #include "tensorflow/compiler/xla/service/pass_context.h"
 #include "tensorflow/compiler/xla/service/spmd/auto_sharding_util.h"
 
+#include "tensorflow/compiler/xla/service/hlo_memory_scheduler.h"
+#include "tensorflow/compiler/xla/service/hlo_live_range.h"
+
 namespace xla {
 namespace gpu {
 
@@ -353,6 +356,33 @@ double EstimateHloModuleCost(const HloModule* hlo_module) {
   return sum;
 }
 
+// added by Zijun Xu
+// this function is used for estimating the peak memory cost of a given HloModule 
+StatusOr<double> EstimateHloModuleMemory(HloModule *module) {
+
+  auto size_fn = [](const BufferValue& buffer) {
+    return xla::spmd::GetBytes(buffer.shape());
+  };
+  
+  // Select an order for emitting the HLO instructions for each
+  // computation. Using this sequence enables tighter buffer liveness analysis
+  // and reduced memory usage (as compared to using DependencyHloOrdering).
+  TF_ASSIGN_OR_RETURN(HloSchedule schedule,
+                      ScheduleModule(module, size_fn,
+                                     ComputationSchedulerToModuleScheduler(
+                                         DFSMemoryScheduler)));
+                                         
+  const HloComputation* entry_computation = module->entry_computation();
+
+  std::unique_ptr<HloAliasAnalysis> alias_analysis =
+      HloAliasAnalysis::Run(module).ConsumeValueOrDie();
+
+  TF_ASSIGN_OR_RETURN(
+      std::unique_ptr<HloLiveRange> hlo_live_range,
+      HloLiveRange::Run(schedule, *alias_analysis, entry_computation));
+  
+  return hlo_live_range->ComputePeakMemoryCost();
+}
 
 py::dict convertHloCostToPydict(const HloCost & hlo_cost){
   py::dict result;

@@ -315,4 +315,38 @@ std::string HloLiveRange::ToString() const {
   return output;
 }
 
+double HloLiveRange::ComputePeakMemoryCost() const {
+  std::vector<std::tuple<int64_t /*time*/, bool /*is_end*/, const HloValue*>>
+      events;
+  for (const HloValue* value : alias_analysis_.dataflow_analysis().values()) {
+    auto it = buffer_live_ranges_.find(value);
+    if (it != buffer_live_ranges_.end()) {
+      events.emplace_back(it->second.start, false, value);
+      events.emplace_back(it->second.end + 1, true, value);
+    }
+  }
+  std::sort(events.begin(), events.end());
+
+  int64_t memory_usage = 0;
+  int64_t peak_usage = 0;
+  std::optional<int64_t> peak_time;
+  for (const auto& event : events) {
+    int64_t time;
+    bool is_end;
+    const HloValue* value;
+    std::tie(time, is_end, value) = event;
+    auto buffer_size = ShapeUtil::ByteSizeOf(value->instruction()->shape(), 8);
+    if (is_end) {
+      memory_usage -= buffer_size;
+    } else {
+      memory_usage += buffer_size;
+    }
+    if (peak_usage < memory_usage) {
+      peak_usage = memory_usage;
+      peak_time = time;
+    }
+  }
+  return static_cast<double>(peak_usage);
+}
+
 }  // namespace xla

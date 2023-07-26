@@ -11,6 +11,8 @@ namespace py = pybind11;
 
 double EstimateHloModuleCost(const HloModule* hlo_module);
 
+StatusOr<double> EstimateHloModuleMemory(HloModule* hlo_module);
+
 struct NetworkDescrib
 {
     std::string comm_type;

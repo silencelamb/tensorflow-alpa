@@ -105,6 +105,9 @@ class HloLiveRange {
   // range is not available if the module is partially ordered.
   bool total_order_scheduled() const { return total_order_scheduled_; }
 
+  // added by Zijun Xu
+  double ComputePeakMemoryCost() const;
+
  private:
   explicit HloLiveRange(const HloSchedule& schedule,
                         const HloAliasAnalysis& alias_analysis,

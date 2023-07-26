@@ -820,6 +820,8 @@ void BuildXlaCompilerSubmodule(py::module& m) {
   /***** Alpa Functions Begin *****/
   m.def("set_pass_context", &pass_context::SetPassContext);
   m.def("clear_pass_context", &pass_context::ClearPassContext);
+  // added by Zijun Xu
+  m.def("estimate_hlo_module_memory", &gpu::EstimateHloModuleMemory);
   m.def("estimate_hlo_module_cost", &gpu::EstimateHloModuleCost);
   m.def("hlo_module_cost_analysis", &gpu::HloModuleCost);
   m.def("analytical_perf_of_hlo_module", &analytical_perf::AnalyticalPerfOfHloModule);
