@@ -1400,8 +1400,8 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
           strategies->childs.push_back(FollowInsStrategyVector(
               src_strategies, operand->shape(), instruction_id,
               /* have_memory_cost= */ false, leaf_strategies));
-          RemoveIndivisibleStrategies(strategies->childs.back(),
-                                      operand->shape());
+          // RemoveIndivisibleStrategies(strategies->childs.back(),
+          //                             operand->shape());
         }
         break;
       }
@@ -1413,6 +1413,14 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
             src_strategies->childs[ins->tuple_index()].get(), ins->shape(),
             instruction_id,
             /* have_memory_cost= */ false, leaf_strategies);
+        
+        // add for debug by daixu 20230915
+        // std::cout << "instruction_id: " << instruction_id << std::endl; 
+        // std::cout << "GetTupleElement: " << ins->ToString() << std::endl; 
+        // std::cout << "src_strategies:" << std::endl;
+        // std::cout << PrintStrategyVector(src_strategies) << std::endl;
+        // std::cout << "strategies:" << std::endl;
+        // std::cout << PrintStrategyVector(strategies.get()) << std::endl;
         break;
       }
       case HloOpcode::kOptimizationBarrier:
@@ -1428,6 +1436,15 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
           strategies = FollowInsStrategyVector(
               src_strategies, ins->shape(), instruction_id,
               /* have_memory_cost= */ false, leaf_strategies);
+
+          // add for debug by daixu 20230915
+          // std::cout << "instruction_id: " << instruction_id << std::endl; 
+          // std::cout << "pipeline_marker: " << ins->ToString() << std::endl; 
+          // std::cout << "src_strategies:" << std::endl;
+          // std::cout << PrintStrategyVector(src_strategies) << std::endl;
+          // std::cout << "strategies:" << std::endl;
+          // std::cout << PrintStrategyVector(strategies.get()) << std::endl;
+
         } else {
           LOG(FATAL) << "Unknown CustomCall instruction: " + ins->ToString();
         }
@@ -1436,6 +1453,12 @@ BuildStrategyAndCost(const HloInstructionSequence& sequence,
       default:
         LOG(FATAL) << "Unhandled instruction: " + ins->ToString();
     }
+
+    // add for debug by daixu 20230915
+    // std::cout << "instruction_id: " << instruction_id << "; OpCode: " << opcode << std::endl; 
+    // std::cout << ins->ToString() << std::endl; 
+    // std::cout << "strategies:" << std::endl;
+    // std::cout << PrintStrategyVector(strategies.get()) << std::endl;
 
     // Debug options: forcibly set the the strategy of some instructions.
     if (pass_context::GetBool("auto_sharding::force_strategy", false)) {
@@ -1973,8 +1996,7 @@ std::string PrintLivenessSet(const LivenessSet& liveness_set) {
 }
 
 // Print strategy map for debugging.
-std::string PrintStrategyVector(const StrategyVector* strategies,
-                                size_t indention = 0) {
+std::string PrintStrategyVector(const StrategyVector* strategies, size_t indention) {
   std::ostringstream os;
   if (strategies->is_tuple) {
     for (size_t i = 0; i < strategies->childs.size(); ++i) {
@@ -2245,7 +2267,9 @@ StatusOr<bool> AutoSharding::Run(
                            cluster_env, solver_option));
   AliasSet alias_set =
       BuildAliasSet(module, alias_analysis->dataflow_analysis(), strategy_map);
-  // std::cerr << PrintStrategyMap(strategy_map, sequence);
+  
+  // only for debug
+  // std::cout << PrintStrategyMap(strategy_map, sequence);
 
   // ----- Build cost graph and merge unimporant nodes -----
   CostGraph cost_graph(leaf_strategies, associative_dot_pairs);
