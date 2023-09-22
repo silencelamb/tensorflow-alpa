@@ -214,7 +214,69 @@ namespace analytical_perf {
         };
     }
     double AnalyticalPerfOfHloModule(const HloModule* hlo_module);
-    
+    double AnalyticalMemoryCostOfHloModule(const HloModule* fw_module, const HloModule* bw_module, 
+                                            const HloModule* apply_grad_module);
+
+    class MemoryOffloader {
+        public:
+            MemoryOffloader(const HloModule* fw_module, const HloModule* bw_module, 
+                            const HloModule* apply_grad_module, bool force_use_fp16)
+                : force_use_fp16_(force_use_fp16), fw_module_(fw_module), 
+                  bw_module_(bw_module), apply_grad_module_(apply_grad_module) {}
+
+            // The entrance for memory offload cost estimation
+            double EstimateOffloadCost();
+
+            // Return the large param size
+            double ParameterAnalysis(const HloModule* module);
+
+            // Helper func to get the hlo module alloc memory
+            double GetHloMoudleAllocMemory(const HloModule* module);
+
+            // Operates on comp module without backend compilation
+            // estimates fw memory + 2*max(grad) + max(comp_op operands)
+            void OffloadViaStrategy1();
+
+            // Binary search the partition point until each subgraph can meet on_chip_memory_
+            // i.e., max(subgraph) + 2*max(grad) + max_act < on_chip_memory_
+            double OffloadViaStrategy2();
+            int64_t LowerBoundSubGraph(const HloModule* fw_module, int64_t slice_start, int64_t slice_end);
+
+            // Show the memory infos during offload process
+            void LoggingMemoryInfos(int type);
+
+            // Set hardware Configs
+            void SetHardwareConfigs(double on_chip_mem, double mem_bandwidth) {
+                on_chip_memory_ = on_chip_mem;
+                memory_bandwidth_ = mem_bandwidth;
+            }
+        
+        private:
+            // General members
+            bool force_use_fp16_;
+            const HloModule* fw_module_; 
+            const HloModule* bw_module_; 
+            const HloModule* apply_grad_module_;
+            double fw_alloc_memory_ = 0;
+            double bw_alloc_memory_ = 0; 
+            double apply_grad_alloc_memory_ = 0;// alloc memory for (fw + bw + apply grad)
+            double offload_cost_ = 0;
+
+            // Offload strategy 1
+            double offload_1_alloc_memory_ = 0; // fw + (bw - offload_grad size) + max_grad
+            double max_grad_size_ = 0;
+            double max_act_size_ = 0;
+            double offload_grads_size_ = 0;
+
+            // Offload strategy 2
+            std::vector<int64_t> slice_pos_;
+            std::vector<double> in_out_params_; // data transfer in subgroups
+            double minimal_mem_ = 1e20;
+
+            // Hardware related configs
+            double on_chip_memory_ = 0;
+            double memory_bandwidth_ = 0;
+    };
 
 }  // namespace analytical_perf
 }  // namespace xla

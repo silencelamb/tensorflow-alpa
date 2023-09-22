@@ -7,6 +7,7 @@
 #include "tensorflow/compiler/xla/service/hlo_ordering.h"
 #include "tensorflow/compiler/xla/service/hlo_sharding_util.h"
 #include "tensorflow/compiler/xla/service/spmd/auto_sharding_strategy.h"
+#include "pybind11/pybind11.h"
 
 namespace xla {
 namespace spmd {
@@ -2301,6 +2302,23 @@ StatusOr<bool> AutoSharding::Run(
   // ----- Set sharding for all instructions -----
   SetHloSharding(sequence, strategy_map, cost_graph, s_val, cluster_env,
                  solver_option);
+
+  // ----- Put the annotated sharded graph back to python -----
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  {
+    py::object submodule =
+        py::module_::import("alpa.shard_parallel.auto_sharding");
+    py::object set_auto_sharded_hlo_module =
+        submodule.attr("set_auto_sharded_hlo_module");
+    
+    std::shared_ptr<HloModule> ret_module = std::move(module->Clone(module->name() + "_single_graph"));
+    py::object ret = set_auto_sharded_hlo_module(ret_module);
+    if (!ret.is_none()) {
+      PyGILState_Release(gstate);
+      exit(-1);
+    }
+  }
+  PyGILState_Release(gstate);
 
   // std::cerr << "===== Exit AutoSharding =====" << std::endl;
   // std::cerr << module->ToString();

@@ -825,6 +825,7 @@ void BuildXlaCompilerSubmodule(py::module& m) {
   m.def("estimate_hlo_module_cost", &gpu::EstimateHloModuleCost);
   m.def("hlo_module_cost_analysis", &gpu::HloModuleCost);
   m.def("analytical_perf_of_hlo_module", &analytical_perf::AnalyticalPerfOfHloModule);
+  m.def("analytical_memory_cost_of_hlo_module", &analytical_perf::AnalyticalMemoryCostOfHloModule);
   m.def("set_hlo_module_output_shardings", &spmd::SetHloModuleOutputShardings);
   m.def("set_hlo_module_input_shardings", &spmd::SetHloModuleInputShardings);
   m.def("get_grad_sync_channel_ids", &spmd::GetGradSyncChannelIds);
