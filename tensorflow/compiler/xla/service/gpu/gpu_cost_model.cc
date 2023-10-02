@@ -400,7 +400,7 @@ py::dict convertHloCostToPydict(const HloCost & hlo_cost){
 }
 
 
-py::list HloModuleCost(const HloModule* hlo_module) {
+py::list HloModuleCostAnalysis(const HloModule* hlo_module) {
   py::list hlo_cost_result;
 
   const int64_t num_devices = hlo_module->config().num_partitions();
@@ -522,12 +522,19 @@ py::list HloModuleCost(const HloModule* hlo_module) {
       }
     }
 
-    if (ins->IsCustomCall(kGemmCallTarget)) {
+    if (ins->IsCustomCall(kGemmCallTarget) || ins->opcode() == HloOpcode::kDot) {
       const HloInstruction* lhs = ins->operand(0);
       const HloInstruction* rhs = ins->operand(1);
       std::vector<int64_t> lhs_space_dims, rhs_space_dims;
-      auto config = ins->backend_config<GemmBackendConfig>().ValueOrDie();
-      auto dnum = config.dot_dimension_numbers();
+      xla::DotDimensionNumbers dnum;
+      if (ins->IsCustomCall(kGemmCallTarget)) {
+        auto config = ins->backend_config<GemmBackendConfig>().ValueOrDie();
+        dnum = config.dot_dimension_numbers();
+      }
+      if (ins->opcode() == HloOpcode::kDot) {
+        dnum = ins->dot_dimension_numbers();
+      }
+
       std::tie(lhs_space_dims, rhs_space_dims) =
           spmd::GetSpaceDims(lhs->shape(), rhs->shape(), dnum);
 

@@ -174,12 +174,19 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
       }
     }
 
-    if (ins->IsCustomCall(xla::gpu::kGemmCallTarget)) {
+    if (ins->IsCustomCall(xla::gpu::kGemmCallTarget) || ins->opcode() == HloOpcode::kDot) {
       const HloInstruction* lhs = ins->operand(0);
       const HloInstruction* rhs = ins->operand(1);
       std::vector<int64_t> lhs_space_dims, rhs_space_dims;
-      auto config = ins->backend_config<xla::gpu::GemmBackendConfig>().ValueOrDie();
-      auto dnum = config.dot_dimension_numbers();
+      xla::DotDimensionNumbers dnum;
+      if (ins->IsCustomCall(xla::gpu::kGemmCallTarget)){
+        auto config = ins->backend_config<xla::gpu::GemmBackendConfig>().ValueOrDie();
+        dnum = config.dot_dimension_numbers();
+      }
+      if (ins->opcode() == HloOpcode::kDot) {
+        dnum = ins->dot_dimension_numbers();
+      }
+
       std::tie(lhs_space_dims, rhs_space_dims) =
           spmd::GetSpaceDims(lhs->shape(), rhs->shape(), dnum);
 

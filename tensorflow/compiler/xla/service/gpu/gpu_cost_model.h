@@ -60,7 +60,7 @@ struct HloCost{
     }
 };
 
-py::list HloModuleCost(const HloModule* hlo_module);
+py::list HloModuleCostAnalysis(const HloModule* hlo_module);
 
 }  // namespace gpu
 }  // namespace xla
