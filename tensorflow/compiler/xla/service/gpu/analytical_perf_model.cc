@@ -292,6 +292,12 @@ std::unique_ptr<HloModule> SliceHloModule(const HloModule* module, int64_t start
   std::vector<const HloInstruction*> sliced_ret_instructions;
   std::vector<const HloInstruction*> sliced_params;
 
+  if (end_idx - start_idx == 1) {
+    if (comp_instructions[start_idx]->opcode() == HloOpcode::kParameter) {
+      spmd::StdCerr(2) << "Warning: Hit single param case: " << start_idx << "\n"; 
+    }
+  }
+
   for (auto inst : comp_instructions) {
     auto index = inst_2_index[inst];
     // Sliced module [start_idx, end_idx)
@@ -328,6 +334,7 @@ std::unique_ptr<HloModule> SliceHloModule(const HloModule* module, int64_t start
   }
 
   if (sliced_instructions.size() == 0) {
+    spmd::StdCerr(2) << "Error: cause sliced instructions zero "  << "\n"; 
     return nullptr;
   }
   
@@ -407,33 +414,64 @@ std::unique_ptr<HloModule> SliceHloModule(const HloModule* module, int64_t start
   return sliced_module;
 }
 
+void MemoryOffloader::CollectPartitionCandidates() {
+  const HloComputation* entry_comp = fw_module_->entry_computation();
+  auto comp_instructions = entry_comp->MakeInstructionPostOrder();
+  absl::flat_hash_map<const HloInstruction*, int64_t> inst_2_index;
+
+  // Index each instruction
+  int64_t counter = 0;
+  for (auto inst : comp_instructions) {
+    inst_2_index.insert({inst, counter});
+    counter++;
+  }
+  
+  // skip the last tuple ret inst
+  for (int i = 0; i < comp_instructions.size()-1; i++) {
+    auto inst = comp_instructions[i];
+    if (inst->opcode() != HloOpcode::kParameter) {
+      partition_candidates_.push_back(inst_2_index[inst]);
+    }
+  }
+}
+
 // Find first pos which alloc memory > on chip memory in [slice_start, slice_end) 
 int64_t MemoryOffloader::LowerBoundSubGraph(const HloModule* fw_module, int64_t slice_start, int64_t slice_end) {
   auto slice_cnt = slice_end - slice_start;
-  int64_t slice_pos = 0;
+  int64_t slice_mid = 0;
   int64_t iter_start = slice_start;
 
   while(slice_cnt > 0) {
-    slice_pos = iter_start;
+    slice_mid = iter_start;
     auto step = slice_cnt / 2;
-    slice_pos += step;
+    slice_mid += step;
 
+    int64_t slice_start_pos = partition_candidates_[slice_start];
+    int64_t slice_mid_pos = partition_candidates_[slice_mid];
     // spmd::StdCerr(2) << "Try to Slice hlo module: " << slice_start << ", " 
-    //                  << (slice_pos+1) << ", " << slice_end << "\n";
+    //                  << slice_mid << ", " << slice_end
+    //                  << ", with pos: " << slice_start_pos << ", " 
+    //                  << slice_mid_pos+1 << ", " << partition_candidates_.back()+1 <<  "\n";
 
+    // convert parition candidates index to pos in hlo module first
     // slice module to [slice_start, slice_pos]
-    auto sliced_module = SliceHloModule(fw_module, slice_start, slice_pos+1);
+    auto sliced_module = SliceHloModule(fw_module, slice_start_pos, slice_mid_pos+1);
     if (sliced_module == nullptr) {
       // fail to slice module occurs
-      // [FIXME]: occurs for some single inst case
+      // [FIXME]: occurs for some single inst param case
       return -1;
     }
     double sliced_alloc_mem = GetHloMoudleAllocMemory(sliced_module.get());
     auto param_info = ParameterAnalysis(sliced_module.get());
-    // on chip memory: fw(sub_g_i) * 3 - grads(sub_g_i) + max_grad(sub_g_i)
-    double total_mem = sliced_alloc_mem * 3 - param_info.first + param_info.second;
+    // on chip memory: fw(sub_g_i) * 2 - grads(sub_g_i) + max_grad(sub_g_i)
+    double total_mem = sliced_alloc_mem * 2 - param_info.first + param_info.second;
+    if (total_mem < debug_minimal_mem_) {
+      debug_minimal_mem_ = total_mem;
+      minimal_mem_range_.first = slice_start_pos;
+      minimal_mem_range_.second = slice_mid_pos+1;
+    }
     if (total_mem <= on_chip_memory_) {
-      iter_start = ++slice_pos;
+      iter_start = ++slice_mid;
       slice_cnt -= step+1;
     } else {
       slice_cnt = step;
@@ -458,19 +496,32 @@ int64_t MemoryOffloader::LowerBoundSubGraph(const HloModule* fw_module, int64_t 
 // fw_stage: chip(sub_g_1) -> cpu(internal res) -> chip(sub_g_2) -> ... -> chip(sub_g_n)
 // bw stage: in addtition to grads offlaod, do same partition as fw_stage
 void MemoryOffloader::OffloadViaStrategy3() {
+  // first get valid partition insts
+  CollectPartitionCandidates();
+  // if no valid partition candidates
+  if (partition_candidates_.size() == 0) {
+    fw_offload_cost_ = 100;
+    bw_offload_cost_ = 100;
+    apply_grad_offload_cost_ = 100;
+    return;
+  }
+  // add 0, end to parition cadidates
   const HloComputation* comp = fw_module_->entry_computation();
+  // slice_start, slice_end are variables related to binary search algorithm
+  // not the index in hlo module, hlo module index comes from partition_candidates_
   int64_t slice_start = 0;
-  int64_t slice_end = comp->instruction_count();
-
-  // spmd::StdCerr(2) << "\n\nStart subgraph partition: " << slice_start << " ---> " << slice_end << "\n" ;
-
+  int64_t slice_end = partition_candidates_.size();
+  // spmd::StdCerr(2) << "\n\nStart subgraph partition: " << slice_start << " ---> " << slice_end 
+  //                 << ", with pos: " << partition_candidates_[slice_start] << " ---> " << partition_candidates_.back() << "\n";
+  debug_minimal_mem_ = 1e20;
   slice_start = LowerBoundSubGraph(fw_module_, slice_start, slice_end);
   while(slice_start < slice_end) {
     if (slice_start < 0) {
       break;
-    }
-    slice_pos_.push_back(slice_start);
-    // spmd::StdCerr(2) << "Partition point: " << slice_start << "\n" ;
+    }  
+    slice_pos_.push_back(partition_candidates_[slice_start]);
+    // spmd::StdCerr(2) << "Partition point: " << slice_start << ", with pos: " << partition_candidates_[slice_start] << "\n" ;
+    debug_minimal_mem_ = 1e20;
     slice_start = LowerBoundSubGraph(fw_module_, slice_start, slice_end);
   }
 
@@ -494,19 +545,25 @@ void MemoryOffloader::OffloadViaStrategy3() {
 
   // Construct partitioned modules sizeof(slice_pos) + 1
   auto pos_num = slice_pos_.size();
+  int64_t slice_pos_start = partition_candidates_[0];
+  int64_t slice_pos_end = partition_candidates_.back();
   std::vector<std::unique_ptr<HloModule>> slice_modules;
-  // [0, pos_0)
-  auto slice_module = SliceHloModule(fw_module_, 0, slice_pos_[0]); 
-  slice_modules.push_back(std::move(slice_module));
-  // [pos_0, pos_1) ... [pos_last-1, pos_last) etc.
-  for (int i = 0; i < pos_num - 1; i++) {
-    slice_module = SliceHloModule(fw_module_, slice_pos_[i], slice_pos_[i+1]); 
+  // [pos_start, pos_0)
+  if (slice_pos_start != slice_pos_[0]) {
+    auto slice_module = SliceHloModule(fw_module_, slice_pos_start, slice_pos_[0]); 
     slice_modules.push_back(std::move(slice_module));
   }
-  // [pos_last, slice_end)
-  slice_module = SliceHloModule(fw_module_, slice_pos_[pos_num-1], slice_end);  
-  slice_modules.push_back(std::move(slice_module));
-
+  // [pos_0, pos_1) ... [pos_last-1, pos_last) etc.
+  for (int i = 0; i < pos_num - 1; i++) {
+    auto slice_module = SliceHloModule(fw_module_, slice_pos_[i], slice_pos_[i+1]); 
+    slice_modules.push_back(std::move(slice_module));
+  }
+  // [pos_last, pos_end)
+  if (slice_pos_[pos_num-1] != slice_pos_end) {
+    auto slice_module = SliceHloModule(fw_module_, slice_pos_[pos_num-1], slice_pos_end);  
+    slice_modules.push_back(std::move(slice_module));
+  }
+  
   // Get each subgroup module infos
   double total_in_out_params = 0;
   for (int i = 0; i < slice_modules.size(); i++) {
@@ -516,8 +573,8 @@ void MemoryOffloader::OffloadViaStrategy3() {
     total_in_out_params += in_out_param.first;
     in_out_params_.push_back(in_out_param.first);
 
-    // on chip memory: fw(sub_g_i) * 3 - grads(sub_g_i) + max_grad(sub_g_i)
-    double sub_total_mem = sub_mem * 3 - in_out_param.first + in_out_param.second;
+    // on chip memory: fw(sub_g_i) * 2 - grads(sub_g_i) + max_grad(sub_g_i)
+    double sub_total_mem = sub_mem * 2 - in_out_param.first + in_out_param.second;
     slice_mems_.push_back(sub_total_mem);
   }
 
@@ -639,12 +696,14 @@ void MemoryOffloader::LoggingMemoryInfos(int type) const {
   } else if (type == 4) {
     // strategy 3
     os << "Strategy 3 alloc infos: \n";
+    os << "\t\tfW module length: " << fw_module_->entry_computation()->instruction_count() << "\n";
+    os << "\t\tpartition candidates size: " << partition_candidates_.size() - 1 << "\n";
     // slice pos infos 
-    os << "\t\tpos: ";
+    os << "\t\tpos: [" << partition_candidates_[0] << " ";
     for (auto pos : slice_pos_) {
       os << pos << " ";
     }
-    os << "\n";
+    os << partition_candidates_.back() << "]" <<  "\n";
     // in out params infos
     os << "\t\tin/out param size(GB): ";
     for (auto param : in_out_params_) {
@@ -657,6 +716,10 @@ void MemoryOffloader::LoggingMemoryInfos(int type) const {
       os << toGB(mem) << " ";
     }
     os << "\n";
+    if (std::find(slice_pos_.begin(), slice_pos_.end(), -1) != slice_pos_.end()) {
+      os << "\t\tdebug minimal subgroup mem usage: " << toGB(debug_minimal_mem_) << " GB, range:[" 
+      << minimal_mem_range_.first << ", " << minimal_mem_range_.second << ")\n";
+    }
     // total in/out param size
     double total_param_size = std::accumulate(in_out_params_.begin(), in_out_params_.end(), 0.0);
     os << "\t\ttotal in/out param: " << toGB(total_param_size) << " GB\n"; 

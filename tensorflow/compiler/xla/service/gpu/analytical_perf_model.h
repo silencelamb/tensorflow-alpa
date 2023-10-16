@@ -235,7 +235,11 @@ namespace analytical_perf {
 
             // Offload strategy 3            
             void OffloadViaStrategy3();
+            // Binary subgraph partition
             int64_t LowerBoundSubGraph(const HloModule* fw_module, int64_t slice_start, int64_t slice_end);
+            // Lineary parition subgraph
+            // Collect partition candidates
+            void CollectPartitionCandidates();
             
             // Show the memory infos during offload process
             void LoggingMemoryInfos(int type) const;
@@ -282,9 +286,12 @@ namespace analytical_perf {
             double strategy_2_alloc_mem_ = 0;
 
             // Offload strategy 3
+            std::vector<int64_t> partition_candidates_;
             std::vector<int64_t> slice_pos_;
             std::vector<double> in_out_params_; // data transfer in subgroups
             std::vector<double> slice_mems_;
+            double debug_minimal_mem_ = 1e20;   // only use for debug
+            std::pair<int64_t, int64_t> minimal_mem_range_;
 
             // Hardware related configs
             double on_chip_memory_ = 0;
