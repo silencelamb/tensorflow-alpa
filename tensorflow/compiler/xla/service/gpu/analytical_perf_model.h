@@ -214,8 +214,8 @@ namespace analytical_perf {
         };
     }
     double AnalyticalPerfOfHloModule(const HloModule* hlo_module);
-    double AnalyticalMemoryCostOfHloModule(const HloModule* fw_module, const HloModule* bw_module, 
-                                            const HloModule* apply_grad_module);
+    std::vector<double> AnalyticalMemoryCostOfHloModule(const HloModule* fw_module, const HloModule* bw_module, 
+                                                        const HloModule* apply_grad_module);
 
     class MemoryOffloader {
         public:
@@ -225,53 +225,66 @@ namespace analytical_perf {
                   bw_module_(bw_module), apply_grad_module_(apply_grad_module) {}
 
             // The entrance for memory offload cost estimation
-            double EstimateOffloadCost();
+            void EstimateOffloadCost();
 
-            // Return the large param size
-            double ParameterAnalysis(const HloModule* module);
+            // Return the large param & params size
+            std::pair<double, double> ParameterAnalysis(const HloModule* module) const;
 
             // Helper func to get the hlo module alloc memory
             double GetHloMoudleAllocMemory(const HloModule* module);
 
-            // Operates on comp module without backend compilation
-            // estimates fw memory + 2*max(grad) + max(comp_op operands)
-            void OffloadViaStrategy1();
-
-            // Binary search the partition point until each subgraph can meet on_chip_memory_
-            // i.e., max(subgraph) + 2*max(grad) + max_act < on_chip_memory_
-            double OffloadViaStrategy2();
+            // Offload strategy 3            
+            void OffloadViaStrategy3();
             int64_t LowerBoundSubGraph(const HloModule* fw_module, int64_t slice_start, int64_t slice_end);
-
+            
             // Show the memory infos during offload process
-            void LoggingMemoryInfos(int type);
+            void LoggingMemoryInfos(int type) const;
 
             // Set hardware Configs
             void SetHardwareConfigs(double on_chip_mem, double mem_bandwidth) {
                 on_chip_memory_ = on_chip_mem;
                 memory_bandwidth_ = mem_bandwidth;
             }
+
+            // Results getter
+            std::vector<double> GetStagesCost() const { 
+                return {fw_offload_cost_, bw_offload_cost_, apply_grad_offload_cost_};
+            }
         
         private:
             // General members
             bool force_use_fp16_;
+
+            // HloModules
             const HloModule* fw_module_; 
             const HloModule* bw_module_; 
             const HloModule* apply_grad_module_;
+            
+            // HloModules alloc memory infos
             double fw_alloc_memory_ = 0;
             double bw_alloc_memory_ = 0; 
-            double apply_grad_alloc_memory_ = 0;// alloc memory for (fw + bw + apply grad)
-            double offload_cost_ = 0;
+            double apply_grad_alloc_memory_ = 0;
 
-            // Offload strategy 1
-            double offload_1_alloc_memory_ = 0; // fw + (bw - offload_grad size) + max_grad
+            // params & grads infos
+            // note sizeof(grads) == sizeof(params)
+            double params_size_ = 0;
+            double grads_size_ = 0;
             double max_grad_size_ = 0;
-            double max_act_size_ = 0;
-            double offload_grads_size_ = 0;
+            
+            // offload cost for each stage
+            double fw_offload_cost_ = 0;
+            double bw_offload_cost_ = 0;
+            double apply_grad_offload_cost_ = 0;
 
-            // Offload strategy 2
+            // diff strategies memory 
+            double total_alloc_mem_ = 0;
+            double strategy_1_alloc_mem_ = 0;
+            double strategy_2_alloc_mem_ = 0;
+
+            // Offload strategy 3
             std::vector<int64_t> slice_pos_;
             std::vector<double> in_out_params_; // data transfer in subgroups
-            double minimal_mem_ = 1e20;
+            std::vector<double> slice_mems_;
 
             // Hardware related configs
             double on_chip_memory_ = 0;

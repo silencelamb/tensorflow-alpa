@@ -229,8 +229,9 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
 }
 
 // ------ Parameter Analysis ------
-double MemoryOffloader::ParameterAnalysis(const HloModule* module) {
-  double max_param = 0.0;
+std::pair<double, double> MemoryOffloader::ParameterAnalysis(const HloModule* module) const {
+  double params_size = 0.0;
+  double max_param_size = 0.0;
   const HloComputation* entry_comp = module->entry_computation();
   for (auto inst : entry_comp->parameter_instructions()) {
     if (inst->opcode() == HloOpcode::kParameter) {
@@ -239,10 +240,12 @@ double MemoryOffloader::ParameterAnalysis(const HloModule* module) {
         shape.set_element_type(PrimitiveType::F16);
       if (shape.is_dynamic())
         continue;
-      max_param = std::max(spmd::GetBytes(shape), max_param);
+      max_param_size = std::max(spmd::GetBytes(shape), max_param_size);
+      params_size += spmd::GetBytes(shape);
     }
   }
-  return max_param;
+
+  return {params_size, max_param_size};
 }
 
 // ------ Get the hlo module alloc memory ------
@@ -404,97 +407,6 @@ std::unique_ptr<HloModule> SliceHloModule(const HloModule* module, int64_t start
   return sliced_module;
 }
 
-// ------ Offload Strategy 1 ------
-void MemoryOffloader::OffloadViaStrategy1() {
-  const HloComputation* fw_comp = fw_module_->entry_computation();
-  auto fw_instructions = fw_comp->MakeInstructionPostOrder();
-  bool force_use_fp16 = force_use_fp16_;
-  auto calc_shape_bytes = [&force_use_fp16](Shape shape){
-    if (force_use_fp16) {
-      shape.set_element_type(PrimitiveType::F16);
-    }
-    return spmd::GetBytes(shape);
-  };
-  offload_1_alloc_memory_ = 0;
-
-  // [REMOVE ME]: Previous single graph memory model dev code
-  // // 1) Find grads related params, i.e., first use after op barrier inst
-  // // Index each instruction, find opt barrier instruction index
-  // int64_t counter = 0;
-  // int64_t opt_barrier_idx = 0;
-  // absl::flat_hash_map<const HloInstruction*, int64_t> inst_2_index;
-  // for (auto inst : comp_instructions) {
-  //   inst_2_index.insert({inst, counter});
-  //   if (inst->opcode() == HloOpcode::kOptimizationBarrier) {
-  //     opt_barrier_idx = counter;
-  //   }
-  //   counter++;
-  // }
-
-  // // Filter out the grads instructions
-  // max_grad_size_ = 0;
-  // std::vector<const HloInstruction*> grad_params;
-  // int64_t bw_first_partition_idx = INT64_MAX;
-  // bool use_opt_barrier_partition = true;
-
-  // if (use_opt_barrier_partition) {
-  //   // [TODO]: opt_barrier method may fail for some cases 
-  //   // i.e., can't find param inst whose first use > opt_barrier_idx
-  //   if (opt_barrier_idx == 0) {
-  //     // Fail to find opt barrier
-  //     offload_1_alloc_memory_ = 0;
-  //     return;
-  //   }
-  //   bw_first_partition_idx = opt_barrier_idx;
-  // } else {
-  //   // obtain infos about dot, conv ops. these ops must have same number in fw & bw
-  //   // use mid inst as bw start
-  //   // [FIXME]: not feasible, bw may have more ops, still need a partition point?
-  //   std::vector<const HloInstruction*> heavy_ops;
-  //   for (auto inst : comp_instructions) {
-  //     auto op_code = inst->opcode();
-  //     if (op_code == HloOpcode::kDot || op_code == HloOpcode::kConvolution) {
-  //       heavy_ops.push_back(inst);
-  //     }
-  //   }
-  //   if (heavy_ops.size() < 1) {
-  //     offload_1_alloc_memory_ = 0;
-  //     return;
-  //   }
-  //   const HloInstruction* bw_first_heavy_inst = heavy_ops[heavy_ops.size() / 2];
-  //   CHECK(inst_2_index.contains(bw_first_heavy_inst));
-  //   bw_first_partition_idx = inst_2_index[bw_first_heavy_inst];
-  // }
-    
-  // use param in fw to caculate size of grads, 1-to-1
-  offload_grads_size_ = 0;
-  for (auto inst : fw_instructions) {
-    if (inst->opcode() == HloOpcode::kParameter) {
-      // save maximum grad size for future use
-      max_grad_size_ = std::max(max_grad_size_, calc_shape_bytes(inst->shape()));
-      offload_grads_size_ += calc_shape_bytes(inst->shape()); 
-    } 
-  }
-
-
-  // estimates fw memory + 2*max(grad) + max(comp_op operands)
-  max_act_size_ = 0;
-  // auto fw_module = SliceHloModule(comp_module_, 0, bw_first_partition_idx);
-  for (auto inst : bw_module_->entry_computation()->instructions()) {
-    // enter bw graph
-    auto op_code = inst->opcode();
-    if (op_code == HloOpcode::kDot || op_code == HloOpcode::kConvolution) {
-      const HloInstruction* lhs = inst->operand(0);
-      const HloInstruction* rhs = inst->operand(1);
-      // save maximum act size for future use, here assume no diff in op operands
-      max_act_size_ = std::max(max_act_size_, std::max(calc_shape_bytes(lhs->shape()), 
-                                                    calc_shape_bytes(rhs->shape())));
-    }
-  }
-  offload_1_alloc_memory_ += fw_alloc_memory_;
-  offload_1_alloc_memory_ += (bw_alloc_memory_ - offload_grads_size_ + max_grad_size_);
-}
-
 // Find first pos which alloc memory > on chip memory in [slice_start, slice_end) 
 int64_t MemoryOffloader::LowerBoundSubGraph(const HloModule* fw_module, int64_t slice_start, int64_t slice_end) {
   auto slice_cnt = slice_end - slice_start;
@@ -517,8 +429,9 @@ int64_t MemoryOffloader::LowerBoundSubGraph(const HloModule* fw_module, int64_t 
       return -1;
     }
     double sliced_alloc_mem = GetHloMoudleAllocMemory(sliced_module.get());
-    double total_mem = sliced_alloc_mem + 2*max_grad_size_ + max_act_size_;
-    minimal_mem_ = std::min(total_mem, minimal_mem_);
+    auto param_info = ParameterAnalysis(sliced_module.get());
+    // on chip memory: fw(sub_g_i) * 3 - grads(sub_g_i) + max_grad(sub_g_i)
+    double total_mem = sliced_alloc_mem * 3 - param_info.first + param_info.second;
     if (total_mem <= on_chip_memory_) {
       iter_start = ++slice_pos;
       slice_cnt -= step+1;
@@ -527,9 +440,8 @@ int64_t MemoryOffloader::LowerBoundSubGraph(const HloModule* fw_module, int64_t 
     }
     // spmd::StdCerr(2) << " Subgraph Memsize: " << (sliced_alloc_mem/1024/1024/1024) << "GB, " 
     //                                           << (total_mem/1024/1024/1024) << "GB, "
-    //                                           << (minimal_mem_/1024/1024/1024) << "GB, "
     //                                           << (on_chip_memory_/1024/1024/1024) << "GB" << "\n" ;
-    // spmd::StdCerr(2) << sliced_module->ToString() << "\n";
+    // // spmd::StdCerr(2) << sliced_module->ToString() << "\n";
   }
 
   // fail to find index can meet the on chip memory
@@ -540,10 +452,13 @@ int64_t MemoryOffloader::LowerBoundSubGraph(const HloModule* fw_module, int64_t 
   return iter_start;
 }
 
-// ------ Offload Strategy 2 ------
-double MemoryOffloader::OffloadViaStrategy2() {
+// Offload strategy 3: subgroups internal res offload
+// i.e., layers by layers exectution
+// execution flow:
+// fw_stage: chip(sub_g_1) -> cpu(internal res) -> chip(sub_g_2) -> ... -> chip(sub_g_n)
+// bw stage: in addtition to grads offlaod, do same partition as fw_stage
+void MemoryOffloader::OffloadViaStrategy3() {
   const HloComputation* comp = fw_module_->entry_computation();
-
   int64_t slice_start = 0;
   int64_t slice_end = comp->instruction_count();
 
@@ -563,155 +478,198 @@ double MemoryOffloader::OffloadViaStrategy2() {
   // ret relative large cost 
   if (slice_start == -1) {
     slice_pos_.push_back(-1); // just for log
-    return 100;
+    fw_offload_cost_ = 100;
+    bw_offload_cost_ = 100;
+    apply_grad_offload_cost_ = 100;
+    return;
   }
   // No need partition hlo module, return strategy 1 cost 
   // may not enter in estimation process, a test branch
   if (slice_pos_.empty()) {
-    return offload_grads_size_ / memory_bandwidth_;
+    fw_offload_cost_ = 0;
+    bw_offload_cost_ = grads_size_ / memory_bandwidth_;
+    apply_grad_offload_cost_ = params_size_ / memory_bandwidth_;
+    return;
   }
 
-  bool force_use_fp16 = force_use_fp16_;
-  auto GetParamSize = [&force_use_fp16](const HloModule* local_module) {
-    double params_size = 0;
-    const HloComputation* entry_comp = local_module->entry_computation();
-    for (auto inst : entry_comp->instructions()) {
-      if (inst->opcode() == HloOpcode::kParameter) {
-        auto shape = inst->shape();
-        if (force_use_fp16) {
-          shape.set_element_type(PrimitiveType::F16);
-        }
-        if (shape.is_dynamic())
-          continue;
-        params_size += spmd::GetBytes(shape);
-      }
-    }
-    return params_size;
-  };
-
   // Construct partitioned modules sizeof(slice_pos) + 1
-  double total_in_out_params = 0;
-  double in_out_param = 0;
-  double offload_cost = 0;
   auto pos_num = slice_pos_.size();
+  std::vector<std::unique_ptr<HloModule>> slice_modules;
   // [0, pos_0)
   auto slice_module = SliceHloModule(fw_module_, 0, slice_pos_[0]); 
+  slice_modules.push_back(std::move(slice_module));
   // [pos_0, pos_1) ... [pos_last-1, pos_last) etc.
   for (int i = 0; i < pos_num - 1; i++) {
     slice_module = SliceHloModule(fw_module_, slice_pos_[i], slice_pos_[i+1]); 
-    // add param size 
-    in_out_param = GetParamSize(slice_module.get());
-    in_out_params_.push_back(in_out_param);
-    total_in_out_params += in_out_param;
+    slice_modules.push_back(std::move(slice_module));
   }
   // [pos_last, slice_end)
   slice_module = SliceHloModule(fw_module_, slice_pos_[pos_num-1], slice_end);  
-  in_out_param = GetParamSize(slice_module.get());
-  in_out_params_.push_back(in_out_param);
-  total_in_out_params += in_out_param;
+  slice_modules.push_back(std::move(slice_module));
 
-  // cost of strategy_2 = cost of strategy_1 + subgraph in/out load/save cost
-  offload_cost = (2*total_in_out_params + offload_grads_size_) / memory_bandwidth_;
-  return offload_cost;
+  // Get each subgroup module infos
+  double total_in_out_params = 0;
+  for (int i = 0; i < slice_modules.size(); i++) {
+    const HloModule* module = slice_modules[i].get();
+    double sub_mem = GetHloMoudleAllocMemory(module);
+    auto in_out_param = ParameterAnalysis(module);
+    total_in_out_params += in_out_param.first;
+    in_out_params_.push_back(in_out_param.first);
+
+    // on chip memory: fw(sub_g_i) * 3 - grads(sub_g_i) + max_grad(sub_g_i)
+    double sub_total_mem = sub_mem * 3 - in_out_param.first + in_out_param.second;
+    slice_mems_.push_back(sub_total_mem);
+  }
+
+  // fw_offload_cost_: total(sub_groups in/out)
+  // bw_offload_cost_: (grads) + total(sub_groups in/out)
+  // apply_grad_offload_cost_: (params)
+  fw_offload_cost_ = total_in_out_params / memory_bandwidth_;
+  bw_offload_cost_ = (total_in_out_params + grads_size_) / memory_bandwidth_;
+  apply_grad_offload_cost_ = params_size_ / memory_bandwidth_;
+
+  return;
 }
 
 // ------ Entry func to estimate offload cost ------
-double MemoryOffloader::EstimateOffloadCost() {
-  // First do parameter analysis
-  auto largest_param = ParameterAnalysis(fw_module_);
-  if (largest_param > on_chip_memory_) {
-    offload_cost_ = 100;
-    LoggingMemoryInfos(0);
-    return offload_cost_;
-  }
+void MemoryOffloader::EstimateOffloadCost() {
+  // Initial all cost as 0s
+  fw_offload_cost_ = 0;
+  bw_offload_cost_ = 0;
+  apply_grad_offload_cost_ = 0;
 
-  // Estimate whole module alloc memory
+  // parameter analysis
+  auto param_info = ParameterAnalysis(fw_module_);
+  params_size_ = param_info.first;
+  grads_size_ = params_size_;
+  max_grad_size_ = param_info.second;
+
+  // Estimate modules alloc memory
   fw_alloc_memory_ = GetHloMoudleAllocMemory(fw_module_);
   bw_alloc_memory_= GetHloMoudleAllocMemory(bw_module_);
   apply_grad_alloc_memory_= GetHloMoudleAllocMemory(apply_grad_module_);
 
-  if ((fw_alloc_memory_ + bw_alloc_memory_ + apply_grad_alloc_memory_) <= on_chip_memory_) {
-    offload_cost_ = 0;
+  // if exists large param out of on_chip_mem, return large cost as penalty
+  if (max_grad_size_ > on_chip_memory_) {
+    fw_offload_cost_ = 100;
+    bw_offload_cost_ = 100;
+    apply_grad_offload_cost_ = 100;
+    LoggingMemoryInfos(0);
+    return;
+  }
+  
+  // If can fit all modules alloc memory
+  total_alloc_mem_ = fw_alloc_memory_ + bw_alloc_memory_ + apply_grad_alloc_memory_;
+  if (total_alloc_mem_ <= on_chip_memory_) {
     LoggingMemoryInfos(1);
-    return offload_cost_;
+    return;
   }
 
-  // Offload strategy 1
-  OffloadViaStrategy1();
-  if (offload_1_alloc_memory_ <= on_chip_memory_) {
-    // assume (save grad & bw comp) overlap, (load grad & grad upd) overlap
-    // thus, main cost from load grad back to on chip mem
-    offload_cost_ = offload_grads_size_ / memory_bandwidth_;
+  // Offload strategy 1: opt states offload
+  // execution flow:
+  // opt stage: chip(grads) ---> cpu(udpated params) ---> chip 
+  // result:
+  // on chip memory: (fw + bw)
+  // apply_grad_offload_cost_: (grads + params)
+  strategy_1_alloc_mem_ = fw_alloc_memory_ + bw_alloc_memory_;
+  if (strategy_1_alloc_mem_ <= on_chip_memory_) {
+    apply_grad_offload_cost_ = (params_size_ + grads_size_) / memory_bandwidth_;    
     LoggingMemoryInfos(2);
-    return offload_cost_;
+    return;
   }
 
-  // Offload strategy 2
-  offload_cost_ = OffloadViaStrategy2();
-  LoggingMemoryInfos(3);
+  // Offload strategy 2: bw grads offload
+  // execution flow:
+  // bw stage: chip(grads) ---> cpu(updated params)
+  // result:
+  // on chip memory: (fw + bw - grads_size + max_grad_size)
+  // bw_offload_cost_: (grads)
+  // apply_grad_offload_cost_: (params)
+  strategy_2_alloc_mem_ = fw_alloc_memory_ + bw_alloc_memory_ - grads_size_ + max_grad_size_;
+  if (strategy_2_alloc_mem_ <= on_chip_memory_) {
+    // assume (save grad & bw comp) overlap, (load grad & grad upd) overlap
+    bw_offload_cost_ = grads_size_ / memory_bandwidth_;
+    apply_grad_offload_cost_ = params_size_ / memory_bandwidth_;
+    LoggingMemoryInfos(3);
+    return;
+  }
 
-  return offload_cost_;
+  // Offload strategy 3, layers by layers execution
+  // strategy 3 mem alloc & cost obtained in internal func
+  OffloadViaStrategy3();
+  LoggingMemoryInfos(4);
+  return;
 }
 
-void MemoryOffloader::LoggingMemoryInfos(int type) {
+void MemoryOffloader::LoggingMemoryInfos(int type) const {
   auto toGB = [](double size) {
     return size/1024/1024/1024;
   };
 
   std::ostringstream os;
   std::vector<std::string> log_types = {"super_large_param", "whole_module_can_fit", 
-                                        "offload_strategy_1", "offload_strategy_2"};
+                                        "offload_strategy_1", "offload_strategy_2", 
+                                        "offload_strategy_3"};
 
   os << "\n------------ Memory Offload Alloc Infos Start ------------\n";
 
   os << "On chip memory: " << toGB(on_chip_memory_) 
                            << " GB, memory bw: " << toGB(memory_bandwidth_) << " GB/s" << "\n"; 
-  os << "Largest parameter size: " << toGB(ParameterAnalysis(fw_module_)) << " GB\n";
   os << "Hlo module alloc infos: \n" 
                            << "\t\tfw module: " << toGB(fw_alloc_memory_) << " GB\n"
                            << "\t\tbw module: " << toGB(bw_alloc_memory_) << " GB\n"
                            << "\t\tapply_grad module: " << toGB(apply_grad_alloc_memory_) << " GB\n"
-                           << "\t\ttotal: " << toGB(fw_alloc_memory_+bw_alloc_memory_+apply_grad_alloc_memory_) << " GB\n";
+                           << "\t\ttotal: " << toGB(total_alloc_mem_) << " GB\n";
+  os << "Params infos: \n" 
+                  << "\t\tparams(grads): " << toGB(params_size_) << " GB\n"
+                  << "\t\tmax grad size: " << toGB(max_grad_size_) << " GB\n";
+  os << "Choose strategy: " << log_types[type] << "\n";
 
-  os << "Offload Strategy 1 memory infos: \n" 
-                   << "\t\ttotal: " << toGB(offload_1_alloc_memory_) << " GB\n"
-                   << "\t\tbw subtract way: " << toGB(bw_alloc_memory_-offload_grads_size_+max_grad_size_) << " GB\n"
-                   << "\t\testimate way: " << toGB(2*max_grad_size_ + max_act_size_) << " GB\n"
-                   << "\t\tmax grad size: " << toGB(max_grad_size_) << " GB\n"
-                   << "\t\toffload grads size: "<< toGB(offload_grads_size_) << " GB\n";
+  os << "Each stage cost: \n" 
+                  << "\t\tfw offload cost: " << fw_offload_cost_ << "\n"
+                  << "\t\tbw offload cost: " << bw_offload_cost_ << "\n"
+                  << "\t\tapply grad offload cost: " << apply_grad_offload_cost_ << "\n";
   
-  os << "Offload Strategy 2 memory infos: \n"
-                   << "\t\tfw module length: " << fw_module_->entry_computation()->instruction_count() << "\n"
-                   << "\t\tslice_pos size: " << slice_pos_.size() << "\n"
-                   << "\t\tminimal mem among all partitions: " << toGB(minimal_mem_) << " GB\n";
-  // slice pos infos 
-  os << "\t\tpos: ";
-  for (auto pos : slice_pos_) {
-    os << pos << " ";
+  if (type == 2) {
+    // strategy 1
+    os << "Strategy 1 alloc info: " << toGB(strategy_1_alloc_mem_) << " GB\n";
+  } else if (type == 3) {
+    // strategy 2
+    os << "Strategy 2 alloc info: " << toGB(strategy_2_alloc_mem_) << " GB\n";
+  } else if (type == 4) {
+    // strategy 3
+    os << "Strategy 3 alloc infos: \n";
+    // slice pos infos 
+    os << "\t\tpos: ";
+    for (auto pos : slice_pos_) {
+      os << pos << " ";
+    }
+    os << "\n";
+    // in out params infos
+    os << "\t\tin/out param size(GB): ";
+    for (auto param : in_out_params_) {
+      os << toGB(param) << " ";
+    }
+    os << "\n";
+    // sliced modules infos
+    os << "\t\tsliced module mem(GB): ";
+    for (auto mem : slice_mems_) {
+      os << toGB(mem) << " ";
+    }
+    os << "\n";
+    // total in/out param size
+    double total_param_size = std::accumulate(in_out_params_.begin(), in_out_params_.end(), 0.0);
+    os << "\t\ttotal in/out param: " << toGB(total_param_size) << " GB\n"; 
   }
-  os << "\n";
-  // in out params infos
-  os << "\t\tin/out param size(GB): ";
-  for (auto param : in_out_params_) {
-    os << toGB(param) << " ";
-  }
-  os << "\n";
-  // total in/out param size
-  double total_param_size = std::accumulate(in_out_params_.begin(), in_out_params_.end(), 0.0);
-  os << "\t\ttotal in/out param: " << toGB(total_param_size) << " GB\n";  
-  
-  // Final offload cost
-  os << "Final Offload Cost From [" << log_types[type] << "] : " << offload_cost_ << "\n";  
-  os << "------------ Memory Offload Alloc Infos End ------------\n";
 
+  os << "------------ Memory Offload Alloc Infos End ------------\n\n";
   spmd::StdCerr(2) << os.str();
 }
 
-double AnalyticalMemoryCostOfHloModule(const HloModule* fw_module, const HloModule* bw_module, 
-                                      const HloModule* apply_grad_module) {
+std::vector<double> AnalyticalMemoryCostOfHloModule(const HloModule* fw_module, const HloModule* bw_module, 
+                                                    const HloModule* apply_grad_module) {
   bool force_use_fp16 = pass_context::GetBool("analytical_perf::force_use_fp16", false);
   std::string hardware = pass_context::GetString("analytical_perf::hardware", "gpu");
-  double cost = 0;
 
   // hardware == "gpu"
   int64_t card_mem = pass_context::GetInt("analytical_perf_gpu::card_mem", pow(10, 9));
@@ -727,8 +685,9 @@ double AnalyticalMemoryCostOfHloModule(const HloModule* fw_module, const HloModu
   } else if (hardware == "wsc") {
     mem_offloader.SetHardwareConfigs(tile_mem, wsc_ddr_bandwidth);
   }
-  cost = mem_offloader.EstimateOffloadCost();
+  mem_offloader.EstimateOffloadCost();
 
+  auto cost = mem_offloader.GetStagesCost(); 
   return cost;
 }
 
