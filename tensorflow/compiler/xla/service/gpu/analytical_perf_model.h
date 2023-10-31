@@ -144,15 +144,15 @@ namespace analytical_perf {
             //die之间有bandwidth，die没有单独自己的local_mem
             public:
                 std::vector<std::vector<Tile>> tiles; // 由外面设置;
-                int64_t die_band_width;      // Die间的通信带宽
+                double die_band_width;      // Die间的通信带宽
                 double die_bw_ul;         // Die间通信带宽利用率
                 double die_alpha;    // Link lateny between two dies, measured in s, NVLink is 0.7 * 10e-6 s
                 double die_beta;     // s/Byte
                 
                 void SetTileConfig();
 
-                Die(int64_t tile_r_num=6, int64_t tile_c_num=6, std::map<PrimitiveType, int64_t> tile_cmp={}, int64_t tile_bw=0, int64_t tile_mem=0, 
-                        int64_t die_bw=0, double cmp_ul=1.0, double bw_ul=1.0, double alpha=1.0, double beta=1.0) {
+                Die(int64_t tile_r_num=6, int64_t tile_c_num=6, std::map<PrimitiveType, int64_t> tile_cmp={}, int64_t tile_bw=0, double tile_mem=0.0, 
+                        double die_bw=0.0, double cmp_ul=1.0, double bw_ul=1.0, double alpha=1.0, double beta=1.0) {
                     for(int64_t i = 0; i < tile_r_num; i++){
                         std::vector<Tile> tiles_one_row;
                         for(int64_t j = 0; j < tile_c_num; j++) {

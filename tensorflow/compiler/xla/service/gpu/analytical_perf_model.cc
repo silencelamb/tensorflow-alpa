@@ -96,9 +96,10 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
   int64_t tile_c_num = pass_context::GetInt("analytical_perf_wsc::tile_c_num", 6);
   int64_t tile_bw= pass_context::GetInt("analytical_perf_wsc::tile_bw", pow(10, 9));
   int64_t tile_mem = pass_context::GetInt("analytical_perf_wsc::tile_mem", pow(10, 9));
-  int64_t die_bw = pass_context::GetInt("analytical_perf_wsc::die_bw", pow(10, 9));
+  double die_bw = (double) pass_context::GetInt("analytical_perf_wsc::die_bw", pow(10, 9));
   double die_alpha = pass_context::GetDouble("analytical_perf_wsc::die_alpha");
-  double die_beta = pass_context::GetDouble("analytical_perf_wsc::die_beta");
+  double die_beta = 1.0 / die_bw;
+  std::vector<int64_t> submesh_shape = pass_context::GetIntVector("analytical_perf_wsc::mesh_shape");
   // common
   double cmp_ul = pass_context::GetDouble("analytical_perf::cmp_ul");
   double bw_ul = pass_context::GetDouble("analytical_perf::bw_ul");
@@ -145,9 +146,9 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
       // Expand the special replica_groups {{0}}
       replica_groups = ExpandSpecialReplicaGroups(replica_groups, num_devices);
       std::string group_str = Group2Str(replica_groups);
-      if (replica_groups.size() > 1) {
-        std::cout << "GroupString(unhandled cases): " << group_str << ": ";
-      }
+      // if (replica_groups.size() > 1) {
+      //   std::cout << "GroupString(unhandled cases): " << group_str << ": ";
+      // }
       if (verbose) {
         if (replica_groups.size() <= 1) {
           std::cout << "GroupString: " <<  group_str << ": ";
@@ -201,8 +202,16 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
         }
         else if (hardware == "wsc") {
           if (use_greedy_collective_cost == true) {
-            auto mesh_shape = std::make_pair(comm_mode, std::make_pair(1, replica_groups[0].replica_ids_size()));
-            int time_steps = collective_cost_map[mesh_shape];
+            std::pair<int, int> mesh_shape(0, 0);
+            if (replica_groups.size() == 1) {
+              mesh_shape = std::make_pair(submesh_shape[0], submesh_shape[1]);
+            }
+            else{
+              mesh_shape = std::make_pair(1, replica_groups[0].replica_ids_size());
+            }
+            
+            auto comm_cost_key = std::make_pair(comm_mode, mesh_shape);
+            int time_steps = collective_cost_map[comm_cost_key];
             // std::cout<<size<<" "<<comm_mode<<" "<<num_devices<<std::endl;
             tmp_op_time = wsc_die.AnalyseCommunicateTimeGreedy(size, comm_mode, num_devices, time_steps);
           } else {
