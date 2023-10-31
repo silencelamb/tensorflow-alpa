@@ -9,11 +9,9 @@ namespace xla {
 namespace analytical_perf {
     enum COMM_MODE {
         ALL_GATHER=0,
-        ALL_SCATTER=1,
-        REDUCE_SCATTER=2,
-        ALL_REDUCE=3,
-        ALL_TO_ALL=4,
-        SEND_RECV=5
+        REDUCE_SCATTER=1,
+        ALL_REDUCE=2,
+        ALL_TO_ALL=3,
     };
 
     inline double get_comm_total_size(int64_t comm_bytes, COMM_MODE comm_mode, int64_t num) {
@@ -21,10 +19,6 @@ namespace analytical_perf {
         int64_t total_size = 0;
         switch (comm_mode) {
             case ALL_GATHER:
-                total_size = comm_bytes * (num-1);
-                break;
-            
-            case ALL_SCATTER:
                 total_size = comm_bytes * (num-1);
                 break;
 
@@ -37,10 +31,6 @@ namespace analytical_perf {
                 break;
 
             case ALL_TO_ALL:
-                total_size = comm_bytes * (num-1);
-                break;
-
-            case SEND_RECV:
                 total_size = comm_bytes * (num-1);
                 break;
 
@@ -156,11 +146,13 @@ namespace analytical_perf {
                 std::vector<std::vector<Tile>> tiles; // 由外面设置;
                 int64_t die_band_width;      // Die间的通信带宽
                 double die_bw_ul;         // Die间通信带宽利用率
+                double die_alpha;    // Link lateny between two dies, measured in s, NVLink is 0.7 * 10e-6 s
+                double die_beta;     // s/Byte
                 
                 void SetTileConfig();
 
                 Die(int64_t tile_r_num=6, int64_t tile_c_num=6, std::map<PrimitiveType, int64_t> tile_cmp={}, int64_t tile_bw=0, int64_t tile_mem=0, 
-                        int64_t die_bw=0, double cmp_ul=1.0, double bw_ul=1.0) {
+                        int64_t die_bw=0, double cmp_ul=1.0, double bw_ul=1.0, double alpha=1.0, double beta=1.0) {
                     for(int64_t i = 0; i < tile_r_num; i++){
                         std::vector<Tile> tiles_one_row;
                         for(int64_t j = 0; j < tile_c_num; j++) {
@@ -170,6 +162,8 @@ namespace analytical_perf {
                     }
                     die_band_width = die_bw;
                     die_bw_ul = bw_ul;
+                    die_alpha = alpha;
+                    die_beta = beta;
                 }
                 double AnalyseComputeTime(int64_t ops_num, PrimitiveType datatype ,int64_t die_num, bool force_use_fp16) {
                     if (force_use_fp16) {
@@ -198,7 +192,10 @@ namespace analytical_perf {
                     int64_t total_die_num = die_r_num * die_c_num;
                     return AnalyseCommunicateTime(comm_bytes, comm_mode, total_die_num);
                 }
-
+                // Time = TimeSteps * (alpha + comm_bytes * beta)
+                double AnalyseCommunicateTimeGreedy(int64_t comm_bytes, COMM_MODE comm_mode, int64_t die_num, int time_steps) {
+                    return time_steps * (die_alpha + comm_bytes * die_beta);
+                }
         };
 
         class WafeScaleChip {

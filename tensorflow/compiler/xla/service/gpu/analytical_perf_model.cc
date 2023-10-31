@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <memory>
 #include <numeric>
+#include <type_traits>
+#include <utility>
 #include "tensorflow/compiler/xla/service/gpu/analytical_perf_model.h"
 
 #include "tensorflow/compiler/xla/primitive_util.h"
@@ -95,12 +97,36 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
   int64_t tile_bw= pass_context::GetInt("analytical_perf_wsc::tile_bw", pow(10, 9));
   int64_t tile_mem = pass_context::GetInt("analytical_perf_wsc::tile_mem", pow(10, 9));
   int64_t die_bw = pass_context::GetInt("analytical_perf_wsc::die_bw", pow(10, 9));
+  double die_alpha = pass_context::GetDouble("analytical_perf_wsc::die_alpha");
+  double die_beta = pass_context::GetDouble("analytical_perf_wsc::die_beta");
   // common
   double cmp_ul = pass_context::GetDouble("analytical_perf::cmp_ul");
   double bw_ul = pass_context::GetDouble("analytical_perf::bw_ul");
   gpu::Node gpu_node(card_num, compute_dict, card_bw, card_mem, node_bw, cmp_ul, bw_ul);
-  wsc::Die wsc_die(tile_r_num, tile_c_num, compute_dict, tile_bw, tile_mem, die_bw, cmp_ul, bw_ul);
+  wsc::Die wsc_die(tile_r_num, tile_c_num, compute_dict, tile_bw, tile_mem, die_bw, cmp_ul, bw_ul, die_alpha, die_beta);
 
+  // whether use the greedy search collective cost
+  bool use_greedy_collective_cost = pass_context::GetBool("analytical_perf::use_greedy_coll_cost", false);
+  std::map<std::pair<int, std::pair<int, int>>, int> collective_cost_map;
+  if (use_greedy_collective_cost) {
+    py::dict collective_cost_dict = pass_context::GetPyObject("collective_cost_dict");
+    
+    PyGILState_STATE gstate2 = PyGILState_Ensure();
+    for (auto item : collective_cost_dict) {
+      py::tuple key = py::cast<py::tuple>(item.first);
+      int coll = key[0].cast<int>();
+      py::tuple key_1 = py::cast<py::tuple>(key[1]); 
+      auto mesh_shape = std::make_pair(key_1[0].cast<int>(), key_1[1].cast<int>());
+      collective_cost_map[std::make_pair(coll, mesh_shape)] = py::cast<int>(item.second);
+    }
+    PyGILState_Release(gstate2);
+    // for (const auto &item : collective_cost_map) {
+    //   int coll = item.first.first;
+    //   int m = item.first.second.first;
+    //   int n = item.first.second.second;
+    //   std::cout<<coll<<":("<<m<<" "<<n<<") "<<item.second<<std::endl;
+    // }
+  }
 
   // Compute cost of all instruction.
   double sum = 0.0;
@@ -129,7 +155,7 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
       }
       for (const auto operand : ins->operands()) {
         int64_t size = spmd::GetBytes(operand->shape());
-        double tmp_op_time;
+        double tmp_op_time = 0;
         double normalizer = 1.0;
         COMM_MODE comm_mode = ALL_REDUCE;
         switch (ins->opcode()) {
@@ -174,8 +200,15 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
           }
         }
         else if (hardware == "wsc") {
-          tmp_op_time = wsc_die.AnalyseCommunicateTime(size, comm_mode, num_devices);
-          tmp_op_time /= normalizer;     
+          if (use_greedy_collective_cost == true) {
+            auto mesh_shape = std::make_pair(comm_mode, std::make_pair(1, replica_groups[0].replica_ids_size()));
+            int time_steps = collective_cost_map[mesh_shape];
+            // std::cout<<size<<" "<<comm_mode<<" "<<num_devices<<std::endl;
+            tmp_op_time = wsc_die.AnalyseCommunicateTimeGreedy(size, comm_mode, num_devices, time_steps);
+          } else {
+            tmp_op_time = wsc_die.AnalyseCommunicateTime(size, comm_mode, num_devices);
+            tmp_op_time /= normalizer;     
+          }
         }
         cost += tmp_op_time;
       }
