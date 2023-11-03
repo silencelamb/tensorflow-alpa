@@ -21,6 +21,7 @@
 #include "tensorflow/compiler/xla/service/hlo_ordering.h"
 #include "tensorflow/compiler/xla/service/buffer_value.h"
 #include "tensorflow/compiler/xla/service/buffer_assignment.h"
+#include "tensorflow/compiler/xla/service/hlo_cost_analysis.h"
 
 namespace xla {
 namespace analytical_perf {
@@ -132,6 +133,8 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
   // Compute cost of all instruction.
   double sum = 0.0;
   const HloComputation* entry_computation = hlo_module->entry_computation();
+  auto hlo_analysis = absl::make_unique<HloCostAnalysis>([](const Shape&) { return 0; });
+  
   for (const HloInstruction* ins : entry_computation->instructions()) {
     double cost = 0.0;
 
@@ -255,6 +258,17 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
         cost += wsc_die.AnalyseComputeTime(flop_count, ins->shape().element_type(), 1, force_use_fp16);
       }
     }
+
+    if (ins->opcode() == HloOpcode::kConvolution) {
+      auto conv_flop_count = hlo_analysis->GetConvolutionFlops(ins);
+      if (hardware == "gpu") {
+        cost += gpu_node.cards[0].AnalyseComputeTime(conv_flop_count, ins->shape().element_type(), 1, force_use_fp16);
+      }
+      else {
+        cost += wsc_die.AnalyseComputeTime(conv_flop_count, ins->shape().element_type(), 1, force_use_fp16);
+      }
+    }
+  
     if (verbose == 2) {
       std::cout << ins->opcode() <<  " " <<std::fixed << std::setprecision(8) 
                                  << cost << std::endl;
