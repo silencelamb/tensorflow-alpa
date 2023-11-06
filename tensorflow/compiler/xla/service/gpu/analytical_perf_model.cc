@@ -260,7 +260,7 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
     }
 
     if (ins->opcode() == HloOpcode::kConvolution) {
-      auto conv_flop_count = hlo_analysis->GetConvolutionFlops(ins);
+      auto conv_flop_count = hlo_analysis->GetConvolutionFlops(ins) * 2;
       if (hardware == "gpu") {
         cost += gpu_node.cards[0].AnalyseComputeTime(conv_flop_count, ins->shape().element_type(), 1, force_use_fp16);
       }
