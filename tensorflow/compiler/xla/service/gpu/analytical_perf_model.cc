@@ -105,6 +105,7 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
   double cmp_ul = pass_context::GetDouble("analytical_perf::cmp_ul");
   double bw_ul = pass_context::GetDouble("analytical_perf::bw_ul");
   gpu::Node gpu_node(card_num, compute_dict, card_bw, card_mem, node_bw, cmp_ul, bw_ul);
+  // 4, 4, compute_dict, 128 * GB, 3 MB, 25GB, 0.8, 0.8, 100ns, 1 / 25GB
   wsc::Die wsc_die(tile_r_num, tile_c_num, compute_dict, tile_bw, tile_mem, die_bw, cmp_ul, bw_ul, die_alpha, die_beta);
 
   // whether use the greedy search collective cost
@@ -215,8 +216,8 @@ double AnalyticalPerfOfHloModule(const HloModule* hlo_module) {
             
             auto comm_cost_key = std::make_pair(comm_mode, mesh_shape);
             int time_steps = collective_cost_map[comm_cost_key];
-            // std::cout<<size<<" "<<comm_mode<<" "<<num_devices<<std::endl;
-            tmp_op_time = wsc_die.AnalyseCommunicateTimeGreedy(size, comm_mode, num_devices, time_steps);
+            auto replica_groups_size = replica_groups[0].replica_ids_size();
+            tmp_op_time = wsc_die.AnalyseCommunicateTimeGreedy(size/replica_groups_size, comm_mode, num_devices, time_steps);
           } else {
             tmp_op_time = wsc_die.AnalyseCommunicateTime(size, comm_mode, num_devices);
             tmp_op_time /= normalizer;     
