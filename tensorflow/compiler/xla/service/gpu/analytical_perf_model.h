@@ -185,8 +185,7 @@ namespace analytical_perf {
                     return std::max(intra_die_time, inter_die_time);
                 }
 
-                double AnalyseCommunicateTime(double comm_bytes, COMM_MODE comm_mode, int64_t die_r_num, 
-                            int64_t die_c_num) {
+                double AnalyseCommunicateTime(double comm_bytes, COMM_MODE comm_mode, int64_t die_r_num, int64_t die_c_num) {
                     // 跨Die通信性能估计的策略
                     // 如果是矩形的输入，先换成总的die数目
                     int64_t total_die_num = die_r_num * die_c_num;
