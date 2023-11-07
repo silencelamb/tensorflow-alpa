@@ -778,17 +778,17 @@ std::vector<double> AnalyticalMemoryCostOfHloModule(const HloModule* fw_module, 
 
   // hardware == "gpu"
   int64_t card_mem = pass_context::GetInt("analytical_perf_gpu::card_mem", pow(10, 9));
-  int64_t gpu_ddr_bandwidth = pass_context::GetInt("analytical_perf_gpu::ddr_bandwidth", pow(10, 9));
+  int64_t gpu_pcie_bandwidth = pass_context::GetInt("analytical_perf_gpu::pcie_bandwidth", pow(10, 9));
   // hardware == "wsc"
-  int64_t tile_mem = pass_context::GetInt("analytical_perf_wsc::tile_mem", pow(10, 9));
-  int64_t wsc_ddr_bandwidth = pass_context::GetInt("analytical_perf_wsc::ddr_bandwidth", pow(10, 9));
+  int64_t ddr_mem = pass_context::GetInt("analytical_perf_wsc::ddr_mem", pow(10, 9));
+  int64_t wsc_pcie_bandwidth = pass_context::GetInt("analytical_perf_wsc::pcie_bandwidth", pow(10, 9));
 
   MemoryOffloader mem_offloader(fw_module, bw_module, apply_grad_module, force_use_fp16);
 
   if (hardware == "gpu") {
-    mem_offloader.SetHardwareConfigs(card_mem, gpu_ddr_bandwidth);
+    mem_offloader.SetHardwareConfigs(card_mem, gpu_pcie_bandwidth);
   } else if (hardware == "wsc") {
-    mem_offloader.SetHardwareConfigs(tile_mem, wsc_ddr_bandwidth);
+    mem_offloader.SetHardwareConfigs(ddr_mem, wsc_pcie_bandwidth);
   }
   mem_offloader.EstimateOffloadCost();
 
