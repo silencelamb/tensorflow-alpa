@@ -1240,6 +1240,11 @@ inline HloInstruction* PassThroughCustomCallMarkerUser(
 
   HloInstruction* ret = nullptr;
   for (HloInstruction* user : custom_call->users()) {
+    if (user->opcode() == HloOpcode::kCustomCall) {
+      // handle special case for pipeline_marker custom call used by custom call
+      // StdCerr(2) << "\n@@@@@@@@@ Hit only one custom call user " << user->ToShortString() << "\n"; 
+      continue;
+    }
     CHECK_EQ(user->opcode(), HloOpcode::kGetTupleElement);
     if (user->tuple_index() == index) {
       CHECK_EQ(ret, nullptr);
