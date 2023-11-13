@@ -557,9 +557,9 @@ void MemoryOffloader::OffloadViaStrategy3() {
   CollectPartitionCandidates();
   // if no valid partition candidates
   if (partition_candidates_.size() == 0) {
-    fw_offload_cost_ = 100;
-    bw_offload_cost_ = 100;
-    apply_grad_offload_cost_ = 100;
+    fw_offload_cost_ = 100000;
+    bw_offload_cost_ = 100000;
+    apply_grad_offload_cost_ = 100000;
     return;
   }
   // add 0, end to parition cadidates
@@ -586,9 +586,9 @@ void MemoryOffloader::OffloadViaStrategy3() {
   // ret relative large cost 
   if (slice_start == -1) {
     slice_pos_.push_back(-1); // just for log
-    fw_offload_cost_ = 100;
-    bw_offload_cost_ = 100;
-    apply_grad_offload_cost_ = 100;
+    fw_offload_cost_ = 100000;
+    bw_offload_cost_ = 100000;
+    apply_grad_offload_cost_ = 100000;
     return;
   }
   // No need partition hlo module, return strategy 1 cost 
@@ -665,9 +665,9 @@ void MemoryOffloader::EstimateOffloadCost() {
 
   // if exists large param out of on_chip_mem, return large cost as penalty
   if (max_grad_size_ > on_chip_memory_) {
-    fw_offload_cost_ = 100;
-    bw_offload_cost_ = 100;
-    apply_grad_offload_cost_ = 100;
+    fw_offload_cost_ = 100000;
+    bw_offload_cost_ = 100000;
+    apply_grad_offload_cost_ = 100000;
     LoggingMemoryInfos(0);
     return;
   }
