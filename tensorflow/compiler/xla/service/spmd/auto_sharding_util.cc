@@ -2063,14 +2063,16 @@ void AnnotateShardingWithSimpleHeuristic(
           }
         }
       } else if (heuristic == "shard-first") {
-        if (inst->shape().rank() > 0 &&
-            inst->shape().dimensions(0) % num_devices == 0) {
+        // if (inst->shape().rank() > 0 &&
+            // inst->shape().dimensions(0) % num_devices == 0) {
+        if (inst->shape().rank() > 0) {
           output_spec = Tile(inst->shape(), {0}, {0}, device_mesh_1d);
         }
       } else if (heuristic == "shard-last") {
         int64_t last_dim = inst->shape().rank() - 1;
-        if (inst->shape().rank() > 0 &&
-            inst->shape().dimensions(last_dim) % num_devices == 0) {
+        // if (inst->shape().rank() > 0 &&
+        //     inst->shape().dimensions(last_dim) % num_devices == 0) {
+        if (inst->shape().rank() > 0) {
           output_spec = Tile(inst->shape(), {last_dim}, {0}, device_mesh_1d);
         }
       } else {
