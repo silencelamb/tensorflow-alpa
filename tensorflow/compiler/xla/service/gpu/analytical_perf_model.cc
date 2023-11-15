@@ -520,8 +520,8 @@ int64_t MemoryOffloader::LowerBoundSubGraph(const HloModule* fw_module, int64_t 
     }
     double sliced_alloc_mem = GetHloMoudleAllocMemory(sliced_module.get());
     auto param_info = ParameterAnalysis(sliced_module.get());
-    // on chip memory: fw(sub_g_i) * 2 - grads(sub_g_i) + max_grad(sub_g_i)
-    double total_mem = sliced_alloc_mem * 2 - param_info.first + param_info.second;
+    // on chip memory: fw(sub_g_i) * 1.5 - grads(sub_g_i) + max_grad(sub_g_i)
+    double total_mem = sliced_alloc_mem * 1.5 - param_info.first + param_info.second;
     if (total_mem < debug_minimal_mem_) {
       debug_minimal_mem_ = total_mem;
       minimal_mem_range_.first = slice_start_pos;
@@ -662,6 +662,7 @@ void MemoryOffloader::EstimateOffloadCost() {
   fw_alloc_memory_ = GetHloMoudleAllocMemory(fw_module_);
   bw_alloc_memory_= GetHloMoudleAllocMemory(bw_module_);
   apply_grad_alloc_memory_= GetHloMoudleAllocMemory(apply_grad_module_);
+  double opt_states_size = apply_grad_alloc_memory_ - params_size_ - grads_size_;
 
   // if exists large param out of on_chip_mem, return large cost as penalty
   if (max_grad_size_ > on_chip_memory_) {
@@ -673,7 +674,7 @@ void MemoryOffloader::EstimateOffloadCost() {
   }
   
   // If can fit all modules alloc memory
-  total_alloc_mem_ = fw_alloc_memory_ + bw_alloc_memory_ + apply_grad_alloc_memory_;
+  total_alloc_mem_ = std::max(std::max(fw_alloc_memory_, bw_alloc_memory_),  apply_grad_alloc_memory_);
   if (total_alloc_mem_ <= on_chip_memory_) {
     LoggingMemoryInfos(1);
     return;
@@ -683,9 +684,9 @@ void MemoryOffloader::EstimateOffloadCost() {
   // execution flow:
   // opt stage: chip(grads) ---> cpu(udpated params) ---> chip 
   // result:
-  // on chip memory: (fw + bw)
+  // on chip memory: total_alloc_mem - opt_states_size
   // apply_grad_offload_cost_: (grads + params)
-  strategy_1_alloc_mem_ = fw_alloc_memory_ + bw_alloc_memory_;
+  strategy_1_alloc_mem_ = total_alloc_mem_ - opt_states_size;
   if (strategy_1_alloc_mem_ <= on_chip_memory_) {
     apply_grad_offload_cost_ = (params_size_ + grads_size_) / memory_bandwidth_;    
     LoggingMemoryInfos(2);
@@ -696,10 +697,10 @@ void MemoryOffloader::EstimateOffloadCost() {
   // execution flow:
   // bw stage: chip(grads) ---> cpu(updated params)
   // result:
-  // on chip memory: (fw + bw - grads_size + max_grad_size)
+  // on chip memory: (total_alloc_mem - opt_states_size - grads_size + max_grad_size)
   // bw_offload_cost_: (grads)
   // apply_grad_offload_cost_: (params)
-  strategy_2_alloc_mem_ = fw_alloc_memory_ + bw_alloc_memory_ - grads_size_ + max_grad_size_;
+  strategy_2_alloc_mem_ = strategy_1_alloc_mem_ - grads_size_ + max_grad_size_;
   if (strategy_2_alloc_mem_ <= on_chip_memory_) {
     // assume (save grad & bw comp) overlap, (load grad & grad upd) overlap
     bw_offload_cost_ = grads_size_ / memory_bandwidth_;
