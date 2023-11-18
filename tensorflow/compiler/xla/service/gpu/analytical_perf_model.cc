@@ -661,6 +661,9 @@ void MemoryOffloader::EstimateOffloadCost() {
   // Estimate modules alloc memory
   fw_alloc_memory_ = GetHloMoudleAllocMemory(fw_module_);
   bw_alloc_memory_= GetHloMoudleAllocMemory(bw_module_);
+  if (bw_alloc_memory_ > 3 * fw_alloc_memory_) {
+    bw_alloc_memory_ = 3 * fw_alloc_memory_;
+  }
   apply_grad_alloc_memory_= GetHloMoudleAllocMemory(apply_grad_module_);
   double opt_states_size = apply_grad_alloc_memory_ - params_size_ - grads_size_;
 
