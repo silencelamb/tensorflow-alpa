@@ -689,7 +689,8 @@ void MemoryOffloader::EstimateOffloadCost() {
   // result:
   // on chip memory: total_alloc_mem - opt_states_size
   // apply_grad_offload_cost_: (grads + params)
-  strategy_1_alloc_mem_ = total_alloc_mem_ - opt_states_size;
+  strategy_1_alloc_mem_ = std::max(total_alloc_mem_ - opt_states_size, 
+                                  std::max(fw_alloc_memory_, bw_alloc_memory_));
   if (strategy_1_alloc_mem_ <= on_chip_memory_) {
     apply_grad_offload_cost_ = (params_size_ + grads_size_) / memory_bandwidth_;    
     LoggingMemoryInfos(2);
